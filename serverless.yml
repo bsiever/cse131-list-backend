@@ -1,0 +1,234 @@
+service: cse131-help
+
+provider:
+  name: aws
+  runtime: nodejs8.10
+  stage: ${opt:stage, 'dev'}
+  environment:
+    USER_TABLE: ${self:service.name}-user-${self:provider.stage}
+    CLASS_TABLE: ${self:service.name}-class-${self:provider.stage}
+    SESSION_TABLE: ${self:service.name}-session-${self:provider.stage}
+  websocketsApiName: ${self:service.name}-websocketapi
+  websocketApiRouteSelectionExpression: $request.body.action
+  iamRoleStatements: # permissions for all of your functions can be set here
+    - Effect: Allow
+      Action: # Gives permission to DynamoDB tables in a specific region
+          - dynamodb:DescribeTable
+          - dynamodb:Query
+          - dynamodb:Scan
+          - dynamodb:GetItem
+          - dynamodb:PutItem
+          - dynamodb:UpdateItem
+          - dynamodb:DeleteItem
+      Resource: "arn:aws:dynamodb:${opt:region, self:provider.region}:*:table/${self:service.name}*"
+    - Effect: Allow
+      Action:
+          - s3:getObject
+          - s3:putObject
+      Resource: "arn:aws:s3:::*"
+    - Effect: Allow
+      Action:
+          - "execute-api:ManageConnections"
+      Resource:
+          - "arn:aws:execute-api:*:*:**/@connections/*"
+
+plugins:
+  - serverless-webpack
+
+functions:
+  login:
+    handler: handler.login
+    events:
+      - http:
+          path: login
+          method: post
+          cors: true
+  logout:
+    handler: handler.logout
+    events:
+      - http:
+          path: logout
+          method: post
+          cors: true
+  createClass:
+    handler: handler.createClass
+    events:
+      - http:
+          path: createClass
+          method: post
+          cors: true
+  deleteClass:
+    handler: handler.deleteClass
+    events:
+      - http:
+          path: deleteClass
+          method: post
+          cors: true
+  createUpdateClassMembership:
+    handler: handler.createUpdateClassMembership
+    events:
+      - http:
+          path: createUpdateClassMembership
+          method: post
+          cors: true
+  createUpdateAdminStatus:
+    handler: handler.createUpdateAdminStatus
+    events:
+      - http:
+          path: createUpdateAdminStatus
+          method: post
+          cors: true
+  getAdminInfo:
+    handler: handler.getAdminInfo
+    events:
+      - http:
+          path: getAdminInfo
+          method: post
+          cors: true
+  getClassInfo:
+    handler: handler.getClassInfo
+    events:
+      - http:
+          path: getClassInfo
+          method: post
+          cors: true
+  getClassAdminInfo:
+    handler: handler.getClassAdminInfo
+    events:
+      - http:
+          path: getClassAdminInfo
+          method: post
+          cors: true
+  refreshUserInfo:
+    handler: handler.refreshUserInfo
+    events:
+      - http:
+          path: refreshUserInfo
+          method: post
+          cors: true
+  setUserInfo:
+    handler: handler.setUserInfo
+    events:
+      - http:
+          path: setUserInfo
+          method: post
+          cors: true
+  setClassInfo:
+    handler: handler.setClassInfo
+    events:
+      - http:
+          path: setClassInfo
+          method: post
+  createSession:
+    handler: handler.createSession
+    events:
+      - http:
+          path: createSession
+          method: post
+          cors: true
+  closeSession:
+    handler: handler.closeSession
+    events:
+      - http:
+          path: closeSession
+          method: post
+          cors: true
+  getClassSessions:
+    handler: handler.getClassSessions
+    events:
+      - http:
+          path: getClassSessions
+          method: post
+          cors: true
+  connectionHandler:
+    handler: handler.connectionHandler
+    events:
+      - websocket:
+          route: $connect
+      - websocket:
+          route: $disconnect
+  defaultHandler:
+    handler: handler.defaultHandler
+    events:
+      - websocket:
+          route: $default
+  joinSession:
+    handler: handler.joinSession
+    events:
+      - websocket:
+          route: joinSession
+  leaveSession:
+    handler: handler.leaveSession
+    events:
+      - websocket:
+          route: leaveSession
+  postSession:
+    handler: handler.postSession
+    events:
+      - websocket:
+          route: postSession
+resources:
+  Resources:
+    users:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.USER_TABLE}
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: username
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        BillingMode: PAY_PER_REQUEST
+        GlobalSecondaryIndexes:
+          - IndexName: by_username
+            KeySchema:
+              - AttributeName: username
+                KeyType: HASH
+            Projection:
+              NonKeyAttributes:
+                - id
+                - classes
+                - fullName
+                - hashedPassword
+                - admin
+              ProjectionType: INCLUDE
+    classes:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.CLASS_TABLE}
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        BillingMode: PAY_PER_REQUEST
+    sessions:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.SESSION_TABLE}
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: classId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+          - AttributeName: classId #TODO remove
+            KeyType: RANGE
+        BillingMode: PAY_PER_REQUEST
+        GlobalSecondaryIndexes:
+          - IndexName: by_class
+            KeySchema:
+              - AttributeName: classId
+                KeyType: HASH
+              - AttributeName: id
+                KeyType: RANGE
+            Projection:
+              NonKeyAttributes:
+                - sessionName
+              ProjectionType: INCLUDE
