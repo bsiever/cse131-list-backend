@@ -1,10 +1,12 @@
 import {DynamoDBGetParams, performGet, DynamoDBQueryParams, performQuery, DynamoDBUpdateParams, performUpdate, DynamoDBPutParams, performPut, updateUser } from './database';
 import {ErrorTypes, GeneratedError} from './responses';
-
+const AWS = require('aws-sdk');
 const bcrypt = require('bcryptjs');
 const randtoken = require('rand-token');
 const saltRounds = 10;
 const tokenMinutesTimeout = 90;
+const fromEmail = 'cse131helplist@alexanderjordanbaker.com'
+const websiteURL = 'alexanderjordanbaker.com'
 
 export interface User {
     id: string
@@ -18,7 +20,7 @@ export interface User {
 }
 
 export interface SessionObj {
-    name: string,
+    sessionName: string,
     lists: {[s: string]: string} //Maps id to name
 }
 
@@ -69,9 +71,7 @@ export const validateTokenRequest = async (data: any, requireAdmin?: boolean): P
         Key: {id: data.id},
         ProjectionExpression: "id, userToken, tokenTime, admin"
     };
-    console.log(userParams)
     const userTokenData = await performGet(userParams);
-    console.log(userTokenData)
     if(userTokenData.id !== data.id || userTokenData.userToken !== data.userToken || Date.now()-(60000*tokenMinutesTimeout) > userTokenData.tokenTime) {
         throw new GeneratedError(ErrorTypes.InvalidToken);
     }
@@ -141,8 +141,115 @@ export const createUser = async (username: string, isAdmin: boolean, name: strin
         await addExistingUserToClass(newClass,newUser.id,newPermissionLevel)
     }
     //TODO send email instead of logging
-    console.log(`User created with email ${username} and password ${randomPassword}`)
+    if(newClass) {
+        const className =  await getClassName(newClass);
+        const textBody = `
+            Hi ${name},
+
+            A new account has been setup for you for ${className}
+            Your username is ${username}
+            Your password is ${randomPassword}
+
+            Please change your password after logging in!
+
+            You can access the site by going to ${websiteURL}
+
+            Do not reply to this email
+        `;
+
+        const htmlBody = `
+        <!DOCTYPE html>
+        <html>
+            <head>
+            </head>
+            <body>
+                <h3>Hello ${name},</h3>
+                <p>A new account has been setup for you for ${className}</p>
+                <p>Your username is ${username}</p>
+                <p>Your password is ${randomPassword}</p>
+                <p></p>
+                <p>Please cahnge your password after logging in!</p>
+                <p></p>
+                <p>You can access the site by going to ${websiteURL}</p>
+                <p></p>
+                <p>Do not reply to this email</p>
+            </body>
+        </html>
+        `
+        await sendEmail(username, `New Account for ${className}`,textBody,htmlBody)
+    } else {
+        const textBody = `
+        Hi ${name},
+
+        You have been made an administrator for the List site
+
+        Your username is ${username}
+        Your password is ${randomPassword}
+
+        Please change your password after logging in!
+
+        You can access the site by going to ${websiteURL}
+
+        Do not reply to this email
+    `;
+
+    const htmlBody = `
+    <!DOCTYPE html>
+    <html>
+        <head>
+        </head>
+        <body>
+            <h3>Hello ${name},</h3>
+            <p>ou have been made an administrator for the List site</p>
+            <p>Your username is ${username}</p>
+            <p>Your password is ${randomPassword}</p>
+            <p></p>
+            <p>Please cahnge your password after logging in!</p>
+            <p></p>
+            <p>You can access the site by going to ${websiteURL}</p>
+            <p></p>
+            <p>Do not reply to this email</p>
+        </body>
+    </html>
+    `
+    await sendEmail(username, `New Admin Account for List Site`,textBody,htmlBody)
+    }
+    //TODO remove
+    console.log(username+' '+randomPassword)
     return newUser
+}
+
+const sendEmail = async (to: string, subject: string, textBody: string, htmlBody: string) => {
+    validate(to,'email','To Field Email');
+    //TODO replace with templace instead of explicit bodies
+    const params = {
+        Destination: {
+          ToAddresses: [
+            to
+          ]
+        },
+        Message: { 
+          Body: { 
+            Html: {
+             Charset: "UTF-8",
+             Data: htmlBody
+            },
+            Text: {
+             Charset: "UTF-8",
+             Data: textBody
+            }
+           },
+           Subject: {
+            Charset: 'UTF-8',
+            Data: subject
+           }
+          },
+        Source: fromEmail,
+        ReplyToAddresses: [
+           fromEmail,
+        ],
+    };
+    await new AWS.SES({apiVersion: '2010-12-01'}).sendEmail(params).promise()
 }
 
 export const hashPassword = async (rawPassword: string): Promise<string> => {
@@ -163,7 +270,7 @@ const getClassPermissions = async (id: string, classId: string): Promise<Permiss
         }
     }
     const result: ClassObj = await performGet(request);
-    if(result === null || typeof result === 'undefined' || !result.classUsers[id]) {
+    if(result === null || typeof result === 'undefined' || typeof result.classUsers[id] === 'undefined') {
         throw new GeneratedError(ErrorTypes.ClassDoesNotExist);
     }
     return result.classUsers[id]

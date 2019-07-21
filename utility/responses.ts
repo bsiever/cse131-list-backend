@@ -15,7 +15,8 @@ export enum ErrorTypes {
     InvalidDatabaseRequest,
     UserNotInClass,
     UsernameAlreadyExists,
-    ConnectionNotInSession
+    ConnectionNotInSession,
+    SessionDoesNotExist
 }
 
 export class GeneratedError extends Error {

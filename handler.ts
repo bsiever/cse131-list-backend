@@ -4,11 +4,12 @@ import { APIGatewayProxyHandler, APIGatewayProxyEvent } from 'aws-lambda';
 import 'source-map-support/register';
 
 
-import { User, validateLoginRequest, validateTokenRequest, PermissionLevel, checkClassPermissions, validate, ClassObj, getUserByUsername, createUser, addExistingUserToClass, getClassName, hashPassword } from './utility/security';
+import { User, validateLoginRequest, validateTokenRequest, PermissionLevel, checkClassPermissions, validate, ClassObj, getUserByUsername, createUser, addExistingUserToClass, getClassName, hashPassword, validateArray } from './utility/security';
 import { wrapper } from './utility/responses';
-import { DynamoDBUpdateParams, performUpdate, DynamoDBPutParams, performPut, updateUser, performScan, DynamoDBScanParams, DynamoDBGetParams, performGet, DynamoDBDeleteParams, performDelete, DynamoDBQueryParams, performQuery } from './utility/database';
+import { DynamoDBUpdateParams, performUpdate, DynamoDBPutParams, performPut, updateUser, performScan, DynamoDBScanParams, DynamoDBGetParams, performGet, DynamoDBDeleteParams, performDelete} from './utility/database';
 import {ErrorTypes, GeneratedError} from './utility/responses';
-import { createClassSession, closeClassSession, checkSessionPermissions, checkSessionStatus, getSessionLists, resumeSession } from './utility/sessions';
+import { createList, ListWrapper } from './utility/list';
+import { sendMessageToUser, WebSocketMessages } from './utility/websocket';
 
 const randtoken = require('rand-token');
 
@@ -53,7 +54,8 @@ export const createClass: APIGatewayProxyHandler = async (event: APIGatewayProxy
     const newClass: ClassObj = {
       id: randtoken.generate(32),
       classUsers: {},
-      className: query.className
+      className: query.className,
+      sessions: {}
     }
     newClass.classUsers[query.id] = PermissionLevel.Professor
     const createClassQuery: DynamoDBPutParams = {
@@ -205,24 +207,12 @@ export const getClassInfo: APIGatewayProxyHandler = async (event: APIGatewayProx
     const request: DynamoDBGetParams  = {
       TableName: process.env.CLASS_TABLE,
       Key: {id: query.classId},
-      ProjectionExpression: "classUsers.#givenUser",
+      ProjectionExpression: "classUsers.#givenUser, sessions",
       ExpressionAttributeNames: {
         "#givenUser": query.id
       }
     }
-    let classInfo = await performGet(request)
-    const querySessions: DynamoDBQueryParams = {
-      TableName: process.env.SESSION_TABLE,
-      IndexName: 'by_class',
-      KeyConditionExpression: 'classId = :classId',
-      ExpressionAttributeValues: {
-        ':classId': query.classId
-      },
-      ProjectionExpression: 'sessionName, id'
-    }
-    const sessions =  await performQuery(querySessions);
-    classInfo.sessions = sessions;
-    return classInfo;
+    return await performGet(request) as ClassObj
   });
 }
 
@@ -260,7 +250,7 @@ export const refreshUserInfo: APIGatewayProxyHandler = async (event: APIGatewayP
     const request: DynamoDBGetParams = {
       TableName: process.env.USER_TABLE,
       Key: {id: query.id},
-      ProjectionExpression: 'classes, username'
+      ProjectionExpression: 'classes, username, fullName'
     }
     let result =  await performGet(request)
     //Copied from login function make function to not duplicate
@@ -276,7 +266,8 @@ export const setUserInfo: APIGatewayProxyHandler = async (event: APIGatewayProxy
   return wrapper(async ()=> {
     const query = parseInput(event);
     await validateTokenRequest(query);
-    await validate(query.newUsername,'string', 'newUsername', 1 ,50);
+    await validate(query.newUsername,'string', 'newUsername', 1 ,100);
+    await validate(query.newName,'string','newName',1,50);
     if(query.newPassword) {
       validate(query.newPassword,'string', 'newPassword', 1);
     }
@@ -287,9 +278,10 @@ export const setUserInfo: APIGatewayProxyHandler = async (event: APIGatewayProxy
     const request: DynamoDBUpdateParams = {
       TableName: process.env.USER_TABLE,
       Key: {id: query.id},
-      UpdateExpression: 'set username = :newUsername' + (query.newPassword ? ', hashedPassword = :newHashedPassword':''),
+      UpdateExpression: 'set username = :newUsername, fullName = :newName' + (query.newPassword ? ', hashedPassword = :newHashedPassword':''),
       ExpressionAttributeValues: {
         ':newUsername': query.newUsername,
+        ':newName': query.newName
       }
     }
     if(query.newPassword) {
@@ -321,116 +313,148 @@ export const setClassName: APIGatewayProxyHandler = async (event: APIGatewayProx
 }
 
 export const createSession: APIGatewayProxyHandler = async (event: APIGatewayProxyEvent): Promise<any> => {
-  // return wrapper(async ()=> {
-  //   const query = parseInput(event);
-  //   await validateTokenRequest(query);
-  //   await checkClassPermissions(query.id,query.classId,PermissionLevel.Professor)
-  //   validate(query.newSessionName,'string','newSessionName',1,50)
-  //   await createClassSession(query.classId,query.newSessionName);
-  // });
+  return wrapper(async ()=> {
+    const query = parseInput(event);
+    await validateTokenRequest(query);
+    await checkClassPermissions(query.id,query.classId,PermissionLevel.Professor)
+    validate(query.newSessionName,'string','newSessionName',1,50)
+    validateArray(query.startingLists, 'string', 'startingLists')
+    const newListArray = await Promise.all(query.startingLists.map(async name => {
+      const newList = await createList(query.classId);
+      const result = {}
+      result[newList.id] = name
+      return result
+    }))
+    //https://stackoverflow.com/questions/27538349/merge-multiple-objects-inside-the-same-array-into-one-object
+    const newListObj = newListArray.reduce(((r, c) => Object.assign(r, c)), {})
+    const createClassSession: DynamoDBUpdateParams = {
+      TableName: process.env.CLASS_TABLE,
+      Key: {id: query.classId},
+      UpdateExpression: 'set sessions.#sessionId = :defaultLists',
+      ExpressionAttributeNames: {
+        '#sessionId': randtoken.generate(32)
+      },
+      ExpressionAttributeValues: {
+        ':defaultLists': {sessionName: query.newSessionName, lists: newListObj} //TODO check unique names
+      }
+    }
+    await performUpdate(createClassSession)
+  });
 }
 
 export const closeSession: APIGatewayProxyHandler = async (event: APIGatewayProxyEvent): Promise<any> => {
-  // return wrapper(async ()=> {
-  //   const query = parseInput(event);
-  //   await validateTokenRequest(query);
-  //   await checkSessionPermissions(query.id,query.sessionId,query.classId,PermissionLevel.Professor)
-  //   await closeClassSession(event,query.sessionId);
-  // });
+  return wrapper(async ()=> {
+    const query = parseInput(event);
+    await validateTokenRequest(query);
+    await checkClassPermissions(query.id,query.classId,PermissionLevel.Professor)
+    validate(query.sessionId,'string','sessionId',32,32)
+    const getClassInfoParams: DynamoDBGetParams = {
+      TableName: process.env.CLASS_TABLE,
+      Key: {id: query.classId},
+      ProjectionExpression: 'sessions.#sessionId',
+      ExpressionAttributeNames: {
+        '#sessionId': query.sessionId
+      }
+    }
+    const classInfo = await performGet(getClassInfoParams) as ClassObj
+    if(classInfo.sessions[query.sessionId]) {
+      await Promise.all(Object.keys(classInfo.sessions[query.sessionId].lists).map(async list_name => {
+        const list = new ListWrapper(list_name)
+        await list.closeList(event)
+      }))
+    } else {
+      throw new GeneratedError(ErrorTypes.SessionDoesNotExist)
+    }
+    const removeSessionInfoParams: DynamoDBUpdateParams = {
+      TableName: process.env.CLASS_TABLE,
+      Key: {id: query.classId},
+      UpdateExpression: 'remove sessions.#sessionId',
+      ExpressionAttributeNames: {
+        '#sessionId': query.sessionId
+      }
+    }
+    await performUpdate(removeSessionInfoParams)
+  });
 }
 
-export const connectionHandler: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
-  return
+export const helpNextUser: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
+  return wrapper(async ()=> {
+    const query = parseInput(event, true);
+    await validateTokenRequest(query);
+    const list = new ListWrapper(query.list_id)
+    let positionInfo = (await list.getIndexOfUser(query.id));
+    if(positionInfo.index !== -1) {
+      await list.helpUser(query.id,0,event) //Gets first user
+    } else {
+      throw new GeneratedError(ErrorTypes.ConnectionNotInSession)
+    }
+  });
 }
-
-export const defaultHandler: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
-  return
-}
-
-
-export const joinSession: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
-  // return wrapper(async ()=> {
-  //   const query = parseInput(event);
-  //   await validateTokenRequest(query);
-  //   console.log(event)
-  //   const status = await checkSessionStatus(query.sessionId, query.id,event.requestContext.connectionId, true)
-  //   if(status === null) {
-  //     // const status = await checkSessionPermissions(query.id,query.sessionId,query.classId,PermissionLevel.Student)
-  //     // result = await joinClassSession(query.sessionId,query.id,status)
-  //     await checkSessionPermissions(query.id,query.sessionId,query.classId,PermissionLevel.Student)
-  //     await 
-  //     return await getSessionLists(query.sessionId);
-  //   } else {
-  //     return await resumeSession(query.sessionId, query.id, query.connectionId);
-  //   }
-  // });
-}
-
-export const leaveSession: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
-  //TODO remove from session
-  //TODO inform all relevant members
-}
-
 
 export const joinList: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
-  // return wrapper(async ()=> {
-  //   const query = parseInput(event);
-  //   await validateTokenRequest(query);
-  //   console.log(event)
-  //   const status = await checkSessionStatus(query.sessionId, query.id,event.requestContext.connectionId, true)
-  //   if(status === null) {
-  //     // const status = await checkSessionPermissions(query.id,query.sessionId,query.classId,PermissionLevel.Student)
-  //     // result = await joinClassSession(query.sessionId,query.id,status)
-  //     await checkSessionPermissions(query.id,query.sessionId,query.classId,PermissionLevel.Student)
-  //     return await getSessionLists(query.sessionId);
-  //   } else {
-  //     return await resumeSession(query.sessionId, query.id, query.connectionId);
-  //   }
-  // })
-  //TODO Inform relevant parties
+    return wrapper(async ()=> {
+      const query = parseInput(event, true);
+      await validateTokenRequest(query);
+      const list = new ListWrapper(query.list_id)
+      let positionInfo;
+      try {
+        positionInfo = (await list.getIndexOfUser(query.id));
+      } catch {
+        //In cases of failure, IE list doesn't exist as it has been closed
+        await sendMessageToUser(query.id, event.requestContext.connectionId, '',WebSocketMessages.CloseListSession,event,list);   
+        return;
+      }
+      if(positionInfo.index !== -1) {
+        Object.assign(positionInfo, await list.updateConnectionForUser(query.id,event.requestContext.connectionId));
+      } else {
+        positionInfo = await list.addUser(query.id,event.requestContext.connectionId, event);
+      }
+      await sendMessageToUser(query.id, event.requestContext.connectionId, positionInfo,WebSocketMessages.InitalizeSession,event,list);   
+    });
 }
 
 export const leaveList: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
-  //TODO check if in list and remove if different
-  //Join list
-  //Inform relevant parties
+  return wrapper(async ()=> {
+    const query = parseInput(event, true);
+    await validateTokenRequest(query);
+    const list = new ListWrapper(query.list_id)
+    await list.removeUserFromList(query.id, event);
+  });
 }
 
-export const helpFromList: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
-  //TODO check if in list and remove if different
-  //Join list
-  //Inform relevant parties
+export const flagUser: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
+  return wrapper(async ()=> {
+    const query = parseInput(event, true);
+    await validateTokenRequest(query);
+    const list = new ListWrapper(query.list_id)
+    await list.flagUser(query.id, query.studentName, query.message, event);
+  });
 }
 
-export const getFullList: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
-  //TODO check if in list and remove if different
-  //Join list
-  //Inform relevant parties
+export const helpFlaggedUser: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
+  return wrapper(async ()=> {
+    const query = parseInput(event, true);
+    await validateTokenRequest(query);
+    const list = new ListWrapper(query.list_id)
+    await list.helpFlagUser(query.id, query.studentName, query.message, event);
+  });
 }
+// export const getFullList: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
+//   //TODO check if in list and remove if different
+//   //Join list
+//   //Inform relevant parties
+// }
 
-const parseInput = (event) => {
+const parseInput = (event, websocket = false) => {
   try {
     const query = JSON.parse(event.body);
     if(query === null || typeof query !== 'object') {
       throw new GeneratedError(ErrorTypes.InvalidInput);
     }
-    return query
+    return websocket ? query.data : query;
   } catch (e) {
     throw new GeneratedError(ErrorTypes.InvalidInput);
   }
 }
 
 
-
-
-
-
-//Class
-//Create Session
-//Delete Session
-//Create List
-//Delete List
-//Join List
-//  Check all lists for presence
-//Leave List
-//Each list is independent

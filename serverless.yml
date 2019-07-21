@@ -29,8 +29,14 @@ provider:
     - Effect: Allow
       Action:
           - "execute-api:ManageConnections"
+          - "execute-api:Invoke"
       Resource:
           - "arn:aws:execute-api:*:*:**/@connections/*"
+    - Effect: Allow
+      Action:
+          - ses:SendEmail
+      Resource:
+          - '*'
 
 plugins:
   - serverless-webpack
@@ -133,40 +139,48 @@ functions:
           path: closeSession
           method: post
           cors: true
-  getClassSessions:
-    handler: handler.getClassSessions
-    events:
-      - http:
-          path: getClassSessions
-          method: post
-          cors: true
-  connectionHandler:
-    handler: handler.connectionHandler
-    events:
-      - websocket:
-          route: $connect
-      - websocket:
-          route: $disconnect
-  defaultHandler:
-    handler: handler.defaultHandler
+  # connectionHandler:
+  #   handler: handler.connectionHandler
+  #   events:
+  #     - websocket:
+  #         route: $connect
+  #     - websocket:
+  #         route: $disconnect
+  # defaultHandler:
+  #   handler: handler.defaultHandler
+  #   events:
+  #     - websocket:
+  #         route: $default
+  joinList:
+    handler: handler.joinList
     events:
       - websocket:
-          route: $default
-  joinSession:
-    handler: handler.joinSession
+          route: joinList
+  leaveList:
+    handler: handler.leaveList
     events:
       - websocket:
-          route: joinSession
-  leaveSession:
-    handler: handler.leaveSession
+          route: leaveList
+  helpNextUser:
+    handler: handler.helpNextUser
     events:
       - websocket:
-          route: leaveSession
-  postSession:
-    handler: handler.postSession
+          route: helpNextUser
+  flagUser:
+    handler: handler.flagUser
     events:
       - websocket:
-          route: postSession
+          route: flagUser
+  helpFlaggedUser:
+    handler: handler.helpFlaggedUser
+    events:
+      - websocket:
+          route: helpFlaggedUser
+  # postSession:
+  #   handler: handler.postSession
+  #   events:
+  #     - websocket:
+  #         route: postSession
 resources:
   Resources:
     users:
@@ -213,22 +227,7 @@ resources:
         AttributeDefinitions:
           - AttributeName: id
             AttributeType: S
-          - AttributeName: classId
-            AttributeType: S
         KeySchema:
           - AttributeName: id
             KeyType: HASH
-          - AttributeName: classId #TODO remove
-            KeyType: RANGE
         BillingMode: PAY_PER_REQUEST
-        GlobalSecondaryIndexes:
-          - IndexName: by_class
-            KeySchema:
-              - AttributeName: classId
-                KeyType: HASH
-              - AttributeName: id
-                KeyType: RANGE
-            Projection:
-              NonKeyAttributes:
-                - sessionName
-              ProjectionType: INCLUDE
