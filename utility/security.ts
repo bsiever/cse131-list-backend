@@ -1,12 +1,12 @@
 import {DynamoDBGetParams, performGet, DynamoDBQueryParams, performQuery, DynamoDBUpdateParams, performUpdate, DynamoDBPutParams, performPut, updateUser } from './database';
 import {ErrorTypes, GeneratedError} from './responses';
 const AWS = require('aws-sdk');
-const bcrypt = require('bcryptjs');
 const randtoken = require('rand-token');
-const saltRounds = 10;
+const https = require('https')
 const tokenMinutesTimeout = 90;
-const fromEmail = 'cse131helplist@alexanderjordanbaker.com'
-const websiteURL = 'alexanderjordanbaker.com'
+const fromEmail = 'no-reply@131list.com'
+//const websiteURL = 'http://cse131helplist-prototype.s3-website-us-east-1.amazonaws.com'
+
 
 export interface User {
     id: string
@@ -15,7 +15,6 @@ export interface User {
     classes: string[] | {[s: string]: string}[]
     fullName: string
     username: string
-    hashedPassword?: string,
     admin: boolean
 }
 
@@ -28,6 +27,9 @@ export interface ClassObj {
     id: string,
     classUsers: {},
     className: string,
+    userCode: string,
+    taCode: string,
+    adminCode: string,
     sessions: {[s: string]: SessionObj} //Maps id to SessionObj
 }
 
@@ -40,20 +42,100 @@ export const enum PermissionLevel {
 
 /*User functions for authentication*/
 
+const makeRequest = async (options: object, dataToPost: string): Promise<string> => {
+    return await new Promise((resolve , reject) => {
+        const req = https.request(options, (res) => {
+            res.setEncoding('utf8');
+            let result = '';
+            res.on('data', function (chunk) {
+                result+=chunk;
+            });
+            res.on('end',function(){
+                resolve(result);
+            })
+        });
+
+        req.on('error', (e) => {
+          reject(e.message);
+        });
+
+        // send the request
+        if(dataToPost) req.write(dataToPost);
+        req.end();
+    });
+}
 export const validateLoginRequest = async (data: any): Promise<User> => {
-    validate(data.password,"string","password",1)
-    let result: User;
-    try {
-        result = await getUserByUsername(data.username);
-        const match: boolean = await bcrypt.compare('131'+data.password+'131', result.hashedPassword);
-        if(!match) {
-           throw new GeneratedError(ErrorTypes.InvalidLogin);
+    validate(data.client_code,"string","client_code",1);
+    const dataToPost = `client_id=${process.env.CLIENT_ID}&client_secret=${process.env.CLIENT_SECRET}&code=${data.client_code}`;
+    const options = {
+        host: 'github.com',
+        path: '/login/oauth/access_token',
+        method: 'POST',
+        headers: {
+            'Content-Length': Buffer.byteLength(dataToPost)
         }
-    } catch(e) {
+    };
+    const getTokenResult: string = await makeRequest(options,dataToPost);
+
+    const regex = new RegExp('^.*access_token=([^&]*)&.*token_type=bearer$')
+
+    const found = getTokenResult.match(regex);
+    if(!found) {
         throw new GeneratedError(ErrorTypes.InvalidLogin);
     }
-    delete result.hashedPassword;
-    //Add token
+    const apiToken = found[1];
+    const optionsGetEmails = {
+        host: 'api.github.com',
+        path: '/user/emails',
+        method: 'GET',
+        headers: {
+            'Authorization': 'token '+apiToken,
+            'User-Agent':  'CSE131HelpList'
+        }
+    }
+
+    const getEmailsResult: string = await makeRequest(optionsGetEmails,null);
+    
+    interface email {
+        email: string,
+        primary: boolean,
+        verified: boolean,
+        visibility: string
+    }
+    const emails: email[] = JSON.parse(getEmailsResult);
+
+    let userEmail = null;
+    for(let email of emails) {
+        console.log(email);
+        if(email.email.slice(-10).toLowerCase() === '@wustl.edu') {
+            userEmail = email.email.toLowerCase();
+            break;
+        }
+    }
+    if(!userEmail) {
+        throw new GeneratedError(ErrorTypes.InvalidLogin);
+    }
+
+    const optionsGetName = {
+        host: 'api.github.com',
+        path: '/user',
+        method: 'GET',
+        headers: {
+            'Authorization': 'token '+apiToken,
+            'User-Agent':  'CSE131HelpList'
+        }
+    }
+
+    const getFullNameResult: string = await makeRequest(optionsGetName,null);
+    let userFullName = JSON.parse(getFullNameResult).name;
+    if(userFullName === null) {
+        userFullName = userEmail.slice(0,userEmail.length-10); //Just make start of email
+    }
+    let result: User = await getUserByUsername(userEmail,true);
+    if(result === null) {
+        result = await createUser(userEmail,false,userFullName);
+    }
+
     result.userToken = randtoken.generate(32);
     await updateToken(result.id, result.userToken);
     result.classes = await Promise.all((result.classes as string[]).map(async id=>{
@@ -121,15 +203,12 @@ export const createUser = async (username: string, isAdmin: boolean, name: strin
     validate(username,"email","Username must be email")
     validate(isAdmin,'boolean','isAdmin')
     validate(name,'string','name',1,50)
-    const randomPassword: string = Math.random().toString(36).slice(-8); //https://stackoverflow.com/questions/9719570/generate-random-password-string-with-requirements-in-javascript/9719815
-    const hashedRandomPassword: string = await hashPassword(randomPassword)
     const newUser: User = {
         id: randtoken.generate(32),
         username: username,
         admin: isAdmin,
         tokenTime: 0,
         classes: newClass ? [newClass]: [],
-        hashedPassword: hashedRandomPassword,
         fullName: name
     }
     const createUserQuery: DynamoDBPutParams = {
@@ -141,85 +220,80 @@ export const createUser = async (username: string, isAdmin: boolean, name: strin
         await addExistingUserToClass(newClass,newUser.id,newPermissionLevel)
     }
     //TODO send email instead of logging
-    if(newClass) {
-        const className =  await getClassName(newClass);
-        const textBody = `
-            Hi ${name},
+    // if(newClass) {
+    //     const className =  await getClassName(newClass);
+    //     const textBody = `
+    //         Hi ${name},
 
-            A new account has been setup for you for ${className}
-            Your username is ${username}
-            Your password is ${randomPassword}
+    //         A new account has been setup for you for ${className}
+    //         Your username is ${username}
 
-            Please change your password after logging in!
+    //         Please change your password after logging in!
 
-            You can access the site by going to ${websiteURL}
+    //         You can access the site by going to ${websiteURL}
 
-            Do not reply to this email
-        `;
+    //         Do not reply to this email
+    //     `;
 
-        const htmlBody = `
-        <!DOCTYPE html>
-        <html>
-            <head>
-            </head>
-            <body>
-                <h3>Hello ${name},</h3>
-                <p>A new account has been setup for you for ${className}</p>
-                <p>Your username is ${username}</p>
-                <p>Your password is ${randomPassword}</p>
-                <p></p>
-                <p>Please cahnge your password after logging in!</p>
-                <p></p>
-                <p>You can access the site by going to ${websiteURL}</p>
-                <p></p>
-                <p>Do not reply to this email</p>
-            </body>
-        </html>
-        `
-        await sendEmail(username, `New Account for ${className}`,textBody,htmlBody)
-    } else {
-        const textBody = `
-        Hi ${name},
+    //     const htmlBody = `
+    //     <!DOCTYPE html>
+    //     <html>
+    //         <head>
+    //         </head>
+    //         <body>
+    //             <h3>Hello ${name},</h3>
+    //             <p>A new account has been setup for you for ${className}</p>
+    //             <p>Your username is ${username}</p>
+    //             <p></p>
+    //             <p>Please cahnge your password after logging in!</p>
+    //             <p></p>
+    //             <p>You can access the site by going to ${websiteURL}</p>
+    //             <p></p>
+    //             <p>Do not reply to this email</p>
+    //         </body>
+    //     </html>
+    //     `
+    //     await sendEmail(username, `New Account for ${className}`,textBody,htmlBody)
+    // } else {
+    //     const textBody = `
+    //     Hi ${name},
 
-        You have been made an administrator for the List site
+    //     You have been made an administrator for the List site
 
-        Your username is ${username}
-        Your password is ${randomPassword}
+    //     Your username is ${username}
 
-        Please change your password after logging in!
+    //     Please change your password after logging in!
 
-        You can access the site by going to ${websiteURL}
+    //     You can access the site by going to ${websiteURL}
 
-        Do not reply to this email
-    `;
+    //     Do not reply to this email
+    // `;
 
-    const htmlBody = `
-    <!DOCTYPE html>
-    <html>
-        <head>
-        </head>
-        <body>
-            <h3>Hello ${name},</h3>
-            <p>ou have been made an administrator for the List site</p>
-            <p>Your username is ${username}</p>
-            <p>Your password is ${randomPassword}</p>
-            <p></p>
-            <p>Please cahnge your password after logging in!</p>
-            <p></p>
-            <p>You can access the site by going to ${websiteURL}</p>
-            <p></p>
-            <p>Do not reply to this email</p>
-        </body>
-    </html>
-    `
-    await sendEmail(username, `New Admin Account for List Site`,textBody,htmlBody)
-    }
+    // const htmlBody = `
+    // <!DOCTYPE html>
+    // <html>
+    //     <head>
+    //     </head>
+    //     <body>
+    //         <h3>Hello ${name},</h3>
+    //         <p>You have been made an administrator for the List site</p>
+    //         <p>Your username is ${username}</p>
+    //         <p></p>
+    //         <p>Please change your password after logging in!</p>
+    //         <p></p>
+    //         <p>You can access the site by going to ${websiteURL}</p>
+    //         <p></p>
+    //         <p>Do not reply to this email</p>
+    //     </body>
+    // </html>
+    // `
+    // await sendEmail(username, `New Admin Account for List Site`,textBody,htmlBody)
+    // }
     //TODO remove
-    console.log(username+' '+randomPassword)
     return newUser
 }
 
-const sendEmail = async (to: string, subject: string, textBody: string, htmlBody: string) => {
+export const sendEmail = async (to: string, subject: string, textBody: string, htmlBody: string) => {
     validate(to,'email','To Field Email');
     //TODO replace with templace instead of explicit bodies
     const params = {
@@ -252,9 +326,6 @@ const sendEmail = async (to: string, subject: string, textBody: string, htmlBody
     await new AWS.SES({apiVersion: '2010-12-01'}).sendEmail(params).promise()
 }
 
-export const hashPassword = async (rawPassword: string): Promise<string> => {
-    return await bcrypt.hash('131'+rawPassword+'131',saltRounds);
-}
 /*Class functions*/
 
 //TODO check if dynamodb actually returns maps and sets, or just objects

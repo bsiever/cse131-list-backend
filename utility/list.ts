@@ -1,15 +1,23 @@
-import { DynamoDBPutParams, performPut, DynamoDBUpdateParams, performUpdate, DynamoDBGetParams, performGet, DynamoDBDeleteParams, performDelete } from "./database";
-import { validate, checkClassPermissions, PermissionLevel, User } from "./security";
+import { DynamoDBPutParams, performPut, DynamoDBUpdateParams, performUpdate, DynamoDBGetParams, performGet, DynamoDBDeleteParams, performDelete} from "./database";
+import { validate, checkClassPermissions, PermissionLevel, User, sendEmail } from "./security";
 import { WebSocketMessages, sendMessageToUser } from "./websocket";
 import { APIGatewayEvent } from "aws-lambda";
+import { GeneratedError, ErrorTypes } from "./responses";
 
 const randtoken = require('rand-token');
+
+const timeBetweenCalls = 1000;
 
 interface UserData {
     fullName: string,
     connectionId?: string,
     id: string,
-    permissionLevel: PermissionLevel
+    permissionLevel: PermissionLevel,
+    startTime: number,
+    timedEventTime?: number,
+    helpedStudents?: number,
+    flaggedStudents?: number,
+    helpedFlaggedStudents?: number
 }
 
 interface List {
@@ -18,11 +26,14 @@ interface List {
     listUsers: UserData[],
     observers: UserData[],
     flaggedUsers: {[s: string]: string}
-    version: number
+    version: number, 
+    creatorId: string,
+    listName: string,
+    totalStudentsHelped: number,
+    totalWaitTime: number
 }
 
 export interface UserPositionInfo {
-  //  version: number,
     index: number,
     observer: boolean,
     listId: string,
@@ -38,17 +49,19 @@ export class ListWrapper {
         this.id = list_id;
     }
 
+
     async getList(projection: string): Promise<List> {
         //Always do consistent read so that lists are in sync
         const getList: DynamoDBGetParams = {
             TableName: process.env.SESSION_TABLE,
             Key: {id: this.id},
             ProjectionExpression: projection,
-           // ConsistentRead: true
+            //ConsistentRead: true
         }
         return await performGet(getList)
     }
     async addUser(userId: string, connectionId: string, event: APIGatewayEvent): Promise<UserPositionInfo> {
+        console.log('Adding user '+ userId + ' to list ' + this.id);
         const listObj = await this.getList('classId');
         const permissionLevel = await checkClassPermissions(userId, listObj.classId,PermissionLevel.Student);
         const getUserFullName: DynamoDBGetParams = {
@@ -69,7 +82,8 @@ export class ListWrapper {
                     fullName,
                     id: userId,
                     connectionId,
-                    permissionLevel
+                    permissionLevel,
+                    startTime: Date.now()
                 }],
                 ':empty_list': [],
                 ':one': 1
@@ -84,6 +98,44 @@ export class ListWrapper {
             data.flaggedUsers = newList.Attributes.flaggedUsers;
         }
         return data;
+    }
+
+    async getUserPermissionLevel(userId: string, required: PermissionLevel, helpingUser: boolean, flaggingUser: boolean, helpingFlaggedUser: boolean) {
+            const list = await this.getList('listUsers, observers');
+            const listIndex = list.listUsers.findIndex(value=>value.id === userId);
+            const observerIndex = list.observers.findIndex(value=>value.id === userId);
+            if(listIndex > -1) {
+                if(list.listUsers[listIndex].permissionLevel < required) {
+                    throw new GeneratedError(ErrorTypes.InvalidPermissions);
+                }
+            } else if(observerIndex > -1) {
+                if(list.observers[observerIndex].permissionLevel < required) {
+                    throw new GeneratedError(ErrorTypes.InvalidPermissions);
+                }
+            } else {
+                throw new GeneratedError(ErrorTypes.InvalidPermissions);
+            }
+            
+            const updateUser: DynamoDBUpdateParams = {
+                TableName: process.env.SESSION_TABLE,
+                Key: {id: this.id},
+                UpdateExpression: `set #listName[${Math.max(listIndex,observerIndex)}].timedEventTime = :currentTime` +(helpingUser ? `, #listName[${Math.max(listIndex,observerIndex)}].helpedStudents = if_not_exists(#listName[${Math.max(listIndex,observerIndex)}].helpedStudents, :start) + :one`:'')+(flaggingUser ? `, #listName[${Math.max(listIndex,observerIndex)}].flaggedStudents = if_not_exists(#listName[${Math.max(listIndex,observerIndex)}].flaggedStudents, :start) + :one`:'')+(helpingFlaggedUser ? `, #listName[${Math.max(listIndex,observerIndex)}].helpedFlaggedStudents = if_not_exists(#listName[${Math.max(listIndex,observerIndex)}].helpedFlaggedStudents, :start) + :one`:''),
+                ConditionExpression: `attribute_not_exists(#listName[${Math.max(listIndex,observerIndex)}].timedEventTime) or #listName[${Math.max(listIndex,observerIndex)}].timedEventTime < :cutoffTime`,
+                ExpressionAttributeNames: {
+                    '#listName': Math.max(listIndex,observerIndex) === observerIndex ? 'observers': 'listUsers'
+                },
+                ExpressionAttributeValues: {
+                    ':currentTime' : Date.now(),
+                    ':cutoffTime': Date.now() - timeBetweenCalls,
+                    ':start': 0,
+                    ':one': 1
+                }
+            }
+            try {
+                await performUpdate(updateUser);
+            } catch(e) {
+                throw new GeneratedError(ErrorTypes.TooManyRequests);
+            }
     }
 
     //TODO test
@@ -122,7 +174,6 @@ export class ListWrapper {
             ReturnValues: 'ALL_NEW'
         }
         const list = await performUpdate(updateUser) as {Attributes: List};
-        console.log({totalNumber: list.Attributes.listUsers.length, flaggedUsers: list.Attributes.flaggedUsers})
         return {totalNumber: list.Attributes.listUsers.length, flaggedUsers: list.Attributes.flaggedUsers};
     }
 
@@ -137,10 +188,12 @@ export class ListWrapper {
     }
 
     async removeUserFromList(userId: string, event: APIGatewayEvent) {
-        console.log('Removing user '+userId);
+        console.log('Removing user id '+userId + ' from the list '+this.id);
         const index = await this.getIndexOfUser(userId);
-        console.log('User index '+JSON.stringify(index))
         const correctList = index.observer ? 'observers': 'listUsers'
+        if(index.observer) {
+            return; //Don't remove TAs from the list, even if they request it, to preserve records
+        }
         const updateUser: DynamoDBUpdateParams = {
             TableName: process.env.SESSION_TABLE,
             Key: {id: this.id},
@@ -152,26 +205,29 @@ export class ListWrapper {
             },
             ReturnValues: 'ALL_OLD'
         }
-        const oldValues = await performUpdate(updateUser) as {Attributes: List};
-        console.log(oldValues)
-        console.log(oldValues.Attributes[correctList])
+        const oldValues = await performUpdate(updateUser) as {Attributes: List};   
         if(oldValues.Attributes[correctList][index.index].connectionId) {
             await sendMessageToUser(userId, oldValues.Attributes[correctList][index.index].connectionId, {listId: this.id},WebSocketMessages.CloseListSession,event,this);
         }
-        console.log('Updating users')
         await this.updateUsers(event)
     }
 
     async helpUser(helperId: string, indexOfUser: number, event: APIGatewayEvent, idOfUser?: string) {
-        const listObj = await this.getList('classId');
-        await checkClassPermissions(helperId, listObj.classId,PermissionLevel.TA);
+        await this.getUserPermissionLevel(helperId, PermissionLevel.TA,true,false,false);
+        const addStartTime: DynamoDBUpdateParams = {
+            TableName: process.env.SESSION_TABLE,
+            Key: {id: this.id},
+            UpdateExpression: `set totalWaitTime = totalWaitTime - listUsers[${indexOfUser}].startTime`
+        }
+        await performUpdate(addStartTime)
         const getNextUserParams: DynamoDBUpdateParams = {
             TableName: process.env.SESSION_TABLE,
             Key: {id: this.id},
-            UpdateExpression: `remove listUsers[${indexOfUser}] add version :one`,
+            UpdateExpression: `remove listUsers[${indexOfUser}] add version :one,totalStudentsHelped :one set totalWaitTime  = totalWaitTime + :time`,
             // ConditionExpression: 'version = :currentVersion',
             ExpressionAttributeValues: {
-                ':one': 1
+                ':one': 1,
+                ':time': Date.now()
             },
             
             ReturnValues: 'ALL_OLD'
@@ -183,11 +239,20 @@ export class ListWrapper {
         const oldUser = await performUpdate(getNextUserParams) as {Attributes: List}
         const currentInfo = await this.getList('observers, listUsers')
         const currentHelperIndex = currentInfo.observers.findIndex(value=>value.id === helperId)
+        console.log('List '+this.id+' Helping User: '+oldUser.Attributes.listUsers[indexOfUser].id+' with name ' + oldUser.Attributes.listUsers[indexOfUser].fullName + ' by TA '+currentInfo.observers[currentHelperIndex].id+ ' with name '+currentInfo.observers[currentHelperIndex].fullName);
         //Inform User
         await sendMessageToUser(oldUser.Attributes.listUsers[indexOfUser].id, oldUser.Attributes.listUsers[indexOfUser].connectionId, {helperName: currentInfo.observers[currentHelperIndex].fullName, observer: false},WebSocketMessages.HelpEvent,event,this);
         //Inform Helper
         await sendMessageToUser(currentInfo.observers[currentHelperIndex].id, currentInfo.observers[currentHelperIndex].connectionId, {studentName: oldUser.Attributes.listUsers[indexOfUser].fullName, observer: true},WebSocketMessages.HelperEvent,event,this);
         await this.updateUsers(event)
+    }
+
+    async getFullOverview(requesterId: string, event: APIGatewayEvent) {
+        const listObj = await this.getList('classId');
+        await checkClassPermissions(requesterId, listObj.classId,PermissionLevel.Professor);
+        const users = await this.getList('observers, listUsers');
+        const currentHelperIndex = users.observers.findIndex(value=>value.id === requesterId);
+        await sendMessageToUser(users.observers[currentHelperIndex].id, users.observers[currentHelperIndex].connectionId, {tas: users.observers, users: users.listUsers, observer: true},WebSocketMessages.FullInfo,event,this);
     }
 
     //This function updates all users and observers of changes in the list
@@ -203,6 +268,7 @@ export class ListWrapper {
     }
 
     async closeList(event: APIGatewayEvent): Promise<void> {
+        await this.sendReportEmail();
         const listInfo = await this.getList('listUsers, observers, version')
         await Promise.all(listInfo.listUsers.map(async (user)=> {
             await sendMessageToUser(user.id, user.connectionId, {observer: false, listId: this.id, version: listInfo.version},WebSocketMessages.CloseListSession,event,this);
@@ -214,20 +280,21 @@ export class ListWrapper {
         const deleteList: DynamoDBDeleteParams =  {
             TableName: process.env.SESSION_TABLE,
             Key: {id: this.id}
-        }   
+        }
         await performDelete(deleteList);
     }
 
     async flagUser(userId: string, studentName: string, message: string, event: APIGatewayEvent): Promise<void> {
         validate(studentName, 'string', 'studentName',1,50)
         validate(message, 'string','message',0,1000);
-        const listObj = await this.getList('classId');
-        await checkClassPermissions(userId, listObj.classId,PermissionLevel.TA);
+        await this.getUserPermissionLevel(userId, PermissionLevel.TA,false, true,false);
         const getTAFullName: DynamoDBGetParams = {
             TableName: process.env.USER_TABLE,
             Key: {id: userId},
             ProjectionExpression: 'fullName'
         }
+        const time = (new Date()).toLocaleString('en-US', { hour: 'numeric', minute: 'numeric', hour12: true, timeZone: 'America/Chicago' }).padStart(8,' ');
+
         const taName = (await performGet(getTAFullName) as User).fullName
         const flagUser: DynamoDBUpdateParams = {
             TableName: process.env.SESSION_TABLE,
@@ -238,7 +305,7 @@ export class ListWrapper {
                 '#studentName': studentName
             },
             ExpressionAttributeValues: {
-                ':message': 'TA name: '+taName+', Message: '+message,
+                ':message': 'Time: '+time+', TA name: '+taName+', Message: '+message,
                 ':one': 1
             }
         }
@@ -250,8 +317,8 @@ export class ListWrapper {
     async helpFlagUser(userId: string, studentName: string, message: string, event: APIGatewayEvent): Promise<void> {
         validate(studentName, 'string', 'studentName',1,50)
         validate(message, 'string','message',0,1000);
-        const listObj = await this.getList('classId');
-        await checkClassPermissions(userId, listObj.classId,PermissionLevel.Professor);
+        await this.getUserPermissionLevel(userId, PermissionLevel.TA,false,false,true);
+        console.log('Helping flaged user '+studentName+ ' from TA with Id '+userId);
         const unFlagUser: DynamoDBUpdateParams = {
             TableName: process.env.SESSION_TABLE,
             Key: {id: this.id},
@@ -270,16 +337,72 @@ export class ListWrapper {
         await sendMessageToUser(userId, event.requestContext.connectionId, {studentName, message, observer: true, flagged: true},WebSocketMessages.HelperEvent,event,this);
         await this.updateUsers(event);
     }
+
+    async sendReportEmail(): Promise<void> {
+        const list = await this.getList('creatorId, observers, listName, totalStudentsHelped, totalWaitTime');
+        const userParams: DynamoDBGetParams = {
+            TableName: process.env.USER_TABLE,
+            Key: {id: list.creatorId},
+            ProjectionExpression: "id, username"
+        };
+        const creator = await performGet(userParams);
+        let textBody = `
+            Report for ${list.listName} on ${new Date().toLocaleDateString('en-us',{ weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} at ${new Date().toLocaleString('en-us',{ hour: 'numeric', minute: 'numeric', hour12: true, timeZone: 'America/Chicago' })},
+
+            The following TAs helped/demoed, flagged, or helped a flagged student at least once:
+
+        `;
+        textBody+=`The average wait time was ${millisToMinutesAndSeconds(list.totalWaitTime/list.totalStudentsHelped)} and the total number of students helped was ${list.totalStudentsHelped}`;
+        for(let tas of list.observers) {
+            textBody += `${tas.fullName} helped ${tas.helpedStudents ? tas.helpedStudents : 0} student(s), flagged ${tas.flaggedStudents ? tas.flaggedStudents : 0} student(s), and helped flagged students ${tas.helpedFlaggedStudents ? tas.helpedFlaggedStudents : 0} time(s)\n`
+            textBody += `This TA first joined the list at ${new Date(tas.startTime).toLocaleTimeString('en-us',{ hour: 'numeric', minute: 'numeric', hour12: true, timeZone: 'America/Chicago' })} and helped/flagged their last user at ${tas.timedEventTime ? new Date(tas.timedEventTime).toLocaleTimeString('en-us',{ hour: 'numeric', minute: 'numeric', hour12: true, timeZone: 'America/Chicago' }): 'Undefined'}\n\n`
+        }
+        let htmlBody = `
+        <!DOCTYPE html>
+        <html>
+            <head>
+            </head>
+            <body>
+                <h3>Report for ${list.listName} on ${new Date().toLocaleDateString('en-us',{ weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}  at ${new Date().toLocaleString('en-us',{ hour: 'numeric', minute: 'numeric', hour12: true, timeZone: 'America/Chicago' })}</h3>
+                <p>The following TAs helped/demoed, flagged, or helped a flagged student at least once:</p>`;
+            htmlBody+=`<p> The average wait time was ${millisToMinutesAndSeconds(list.totalWaitTime/list.totalStudentsHelped)} and the total number of students helped was ${list.totalStudentsHelped}</p>`
+            htmlBody+=`
+                <table>
+                    <tr><th>Name</th><th>Helped Students</th><th>Flagged Students</th><th>Helped Flagged Students</th><th>Start Time</th><th>Last Action Time</th></tr>`;
+            for(let tas of list.observers) {
+                htmlBody += `<tr><td>${tas.fullName}</td><td>${tas.helpedStudents ? tas.helpedStudents : 0}</td><td>${tas.flaggedStudents ? tas.flaggedStudents : 0}</td><td>${tas.helpedFlaggedStudents ? tas.helpedFlaggedStudents : 0}</td>`
+                htmlBody += `<td>${new Date(tas.startTime).toLocaleTimeString('en-us',{ hour: 'numeric', minute: 'numeric', hour12: true, timeZone: 'America/Chicago' })}</td><td>${tas.timedEventTime ? new Date(tas.timedEventTime).toLocaleTimeString('en-us',{ hour: 'numeric', minute: 'numeric', hour12: true, timeZone: 'America/Chicago' }): 'Undefined'}</td></tr>`
+            }
+        
+            
+        htmlBody+=`
+                </table>
+            </body>
+        </html>
+        `
+        await sendEmail(creator.username, `Report for `+list.listName,textBody,htmlBody)
+    }
+    
 }
 
-export const createList = async (classId: string): Promise<List> => {
+function millisToMinutesAndSeconds(millis) {
+    var minutes = Math.floor(millis / 60000);
+    var seconds: any = ((millis % 60000) / 1000).toFixed(0);
+    return minutes + ":" + (seconds < 10 ? '0' : '') + seconds;
+  }
+
+export const createList = async (classId: string, creatorId: string, listName: string): Promise<List> => {
     const newList: List = {
         id: randtoken.generate(32),
         classId,
         listUsers: [],
         observers: [],
         flaggedUsers: {},
-        version: 0
+        version: 0,
+        creatorId,
+        listName,
+        totalWaitTime: 0,
+        totalStudentsHelped: 0
     }
     const createListParams: DynamoDBPutParams = {
         TableName: process.env.SESSION_TABLE,

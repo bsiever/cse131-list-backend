@@ -8,6 +8,8 @@ provider:
     USER_TABLE: ${self:service.name}-user-${self:provider.stage}
     CLASS_TABLE: ${self:service.name}-class-${self:provider.stage}
     SESSION_TABLE: ${self:service.name}-session-${self:provider.stage}
+    CLIENT_ID: '9765e58690fb0cd32bd4'
+    CLIENT_SECRET: '09ccdabea643630b3316fcbb547f01be3a69a410'
   websocketsApiName: ${self:service.name}-websocketapi
   websocketApiRouteSelectionExpression: $request.body.action
   iamRoleStatements: # permissions for all of your functions can be set here
@@ -119,11 +121,11 @@ functions:
           path: setUserInfo
           method: post
           cors: true
-  setClassInfo:
-    handler: handler.setClassInfo
+  setClassName:
+    handler: handler.setClassName
     events:
       - http:
-          path: setClassInfo
+          path: setClassName
           method: post
   createSession:
     handler: handler.createSession
@@ -137,6 +139,13 @@ functions:
     events:
       - http:
           path: closeSession
+          method: post
+          cors: true
+  selfAddClass:
+    handler: handler.selfAddClass
+    events:
+      - http:
+          path: selfAddClass
           method: post
           cors: true
   # connectionHandler:
@@ -176,11 +185,11 @@ functions:
     events:
       - websocket:
           route: helpFlaggedUser
-  # postSession:
-  #   handler: handler.postSession
-  #   events:
-  #     - websocket:
-  #         route: postSession
+  getFullOverview:
+    handler: handler.getFullOverview
+    events:
+      - websocket:
+          route: getFullOverview
 resources:
   Resources:
     users:

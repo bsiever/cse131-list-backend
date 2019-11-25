@@ -12,13 +12,14 @@ export enum WebSocketMessages{
     UpdateListStatus = 'updateListStatus',
     HelpEvent = 'helpEvent',
     HelperEvent = 'helperEvent',
-    FlagRecorded = 'flagRecorded'
+    FlagRecorded = 'flagRecorded',
+    FullInfo = 'fullInfo'
 }
 
+//TODO make dynamic using event
 const tempURL = 'dq3o0n1lqf.execute-api.us-east-1.amazonaws.com/dev'
 
-const initApi = (event: APIGatewayEvent) => {
-    console.log(event)
+const initApi = (_: APIGatewayEvent) => {
     if(!apigwManagementApi) {
         apigwManagementApi = new AWS.ApiGatewayManagementApi({
             apiVersion: '2018-11-29',
@@ -29,20 +30,14 @@ const initApi = (event: APIGatewayEvent) => {
 }
 
 export const sendMessageToUser = async (userId: string, connectionId: string, message: any, messageType: WebSocketMessages, event: APIGatewayEvent, list: ListWrapper) => {
-    initApi(event);
-    try {
-        console.log('Started '+userId)
-        await apigwManagementApi.postToConnection({ ConnectionId: connectionId, Data: JSON.stringify({messageType, message}) }).promise().then((a,b)=>{
-            console.log('Finished '+userId)
-            console.log(a)
-            console.log('---')
-            console.log(b)
-        });
-    } catch (e) {
-        console.log('WEBSOCKET error')
-        console.log(e)
-        if (e.statusCode === 410) {
-            await list.removeConnectionForUser(userId, connectionId);
+    if(connectionId) {
+        initApi(event);
+        try {
+            await apigwManagementApi.postToConnection({ ConnectionId: connectionId, Data: JSON.stringify({messageType, message}) }).promise();
+        } catch (e) {
+            if (e.statusCode === 410) {
+                await list.removeConnectionForUser(userId, connectionId);
+            }
         }
     }
 }

@@ -16,7 +16,9 @@ export enum ErrorTypes {
     UserNotInClass,
     UsernameAlreadyExists,
     ConnectionNotInSession,
-    SessionDoesNotExist
+    SessionDoesNotExist,
+    UserAlreadyInClass,
+    TooManyRequests
 }
 
 export class GeneratedError extends Error {

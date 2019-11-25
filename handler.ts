@@ -4,7 +4,7 @@ import { APIGatewayProxyHandler, APIGatewayProxyEvent } from 'aws-lambda';
 import 'source-map-support/register';
 
 
-import { User, validateLoginRequest, validateTokenRequest, PermissionLevel, checkClassPermissions, validate, ClassObj, getUserByUsername, createUser, addExistingUserToClass, getClassName, hashPassword, validateArray } from './utility/security';
+import { User, validateLoginRequest, validateTokenRequest, PermissionLevel, checkClassPermissions, validate, ClassObj, getUserByUsername, createUser, addExistingUserToClass, getClassName, validateArray } from './utility/security';
 import { wrapper } from './utility/responses';
 import { DynamoDBUpdateParams, performUpdate, DynamoDBPutParams, performPut, updateUser, performScan, DynamoDBScanParams, DynamoDBGetParams, performGet, DynamoDBDeleteParams, performDelete} from './utility/database';
 import {ErrorTypes, GeneratedError} from './utility/responses';
@@ -55,6 +55,9 @@ export const createClass: APIGatewayProxyHandler = async (event: APIGatewayProxy
       id: randtoken.generate(32),
       classUsers: {},
       className: query.className,
+      userCode: randtoken.generate(10),
+      taCode: randtoken.generate(10),
+      adminCode: randtoken.generate(10),
       sessions: {}
     }
     newClass.classUsers[query.id] = PermissionLevel.Professor
@@ -216,8 +219,6 @@ export const getClassInfo: APIGatewayProxyHandler = async (event: APIGatewayProx
   });
 }
 
-type classMap = { [s: string]: number; }
-
 export const getClassAdminInfo: APIGatewayProxyHandler = async (event: APIGatewayProxyEvent): Promise<any> => {
   return wrapper(async ()=> {
     const query = parseInput(event)
@@ -226,10 +227,10 @@ export const getClassAdminInfo: APIGatewayProxyHandler = async (event: APIGatewa
     const request: DynamoDBGetParams  = {
       TableName: process.env.CLASS_TABLE,
       Key: {id: query.classId},
-      ProjectionExpression: "classUsers"
+      ProjectionExpression: "classUsers, userCode, taCode, adminCode"
     }
-    const {classUsers} : {classUsers: classMap}= await performGet(request)
-    const mappedClassUsers = await Promise.all(Object.entries(classUsers).map(async ([user,permissionLevel])=>{
+    const result : {classUsers: object, userCode: string, taCode: string, adminCode: string}= await performGet(request);
+    result.classUsers = await Promise.all(Object.entries(result.classUsers).map(async ([user,permissionLevel])=>{
       const userInfoRequest: DynamoDBGetParams = {
         TableName: process.env.USER_TABLE,
         Key: {id: user},
@@ -239,7 +240,7 @@ export const getClassAdminInfo: APIGatewayProxyHandler = async (event: APIGatewa
       result.permissionLevel = permissionLevel;
       return result
     }))
-    return mappedClassUsers;
+    return result;
   });
 }
 
@@ -250,7 +251,7 @@ export const refreshUserInfo: APIGatewayProxyHandler = async (event: APIGatewayP
     const request: DynamoDBGetParams = {
       TableName: process.env.USER_TABLE,
       Key: {id: query.id},
-      ProjectionExpression: 'classes, username, fullName'
+      ProjectionExpression: 'classes, username, fullName, admin'
     }
     let result =  await performGet(request)
     //Copied from login function make function to not duplicate
@@ -266,27 +267,18 @@ export const setUserInfo: APIGatewayProxyHandler = async (event: APIGatewayProxy
   return wrapper(async ()=> {
     const query = parseInput(event);
     await validateTokenRequest(query);
-    await validate(query.newUsername,'string', 'newUsername', 1 ,100);
     await validate(query.newName,'string','newName',1,50);
-    if(query.newPassword) {
-      validate(query.newPassword,'string', 'newPassword', 1);
-    }
-    const existingUser = await getUserByUsername(query.newUsername,true)
-    if(existingUser !== null && existingUser.id !== query.id) {
-      throw new GeneratedError(ErrorTypes.UsernameAlreadyExists)
-    }
+    // const existingUser = await getUserByUsername(query.newUsername,true)
+    // if(existingUser !== null && existingUser.id !== query.id) {
+    //   throw new GeneratedError(ErrorTypes.UsernameAlreadyExists)
+    // }
     const request: DynamoDBUpdateParams = {
       TableName: process.env.USER_TABLE,
       Key: {id: query.id},
-      UpdateExpression: 'set username = :newUsername, fullName = :newName' + (query.newPassword ? ', hashedPassword = :newHashedPassword':''),
+      UpdateExpression: 'set fullName = :newName',
       ExpressionAttributeValues: {
-        ':newUsername': query.newUsername,
         ':newName': query.newName
       }
-    }
-    if(query.newPassword) {
-      const hashedPassword = await hashPassword(query.newPassword)
-      request.ExpressionAttributeValues[':newHashedPassword'] = hashedPassword
     }
     await performUpdate(request)
   })
@@ -319,8 +311,14 @@ export const createSession: APIGatewayProxyHandler = async (event: APIGatewayPro
     await checkClassPermissions(query.id,query.classId,PermissionLevel.Professor)
     validate(query.newSessionName,'string','newSessionName',1,50)
     validateArray(query.startingLists, 'string', 'startingLists')
+    const getClassInfoParams: DynamoDBGetParams = {
+      TableName: process.env.CLASS_TABLE,
+      Key: {id: query.classId},
+      ProjectionExpression: 'className',
+    }
+    const classInfo = await performGet(getClassInfoParams) as ClassObj
     const newListArray = await Promise.all(query.startingLists.map(async name => {
-      const newList = await createList(query.classId);
+      const newList = await createList(query.classId,query.id,'List '+name+' in Class '+classInfo.className);
       const result = {}
       result[newList.id] = name
       return result
@@ -378,11 +376,13 @@ export const closeSession: APIGatewayProxyHandler = async (event: APIGatewayProx
 }
 
 export const helpNextUser: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
+  console.log(Date.now());
   return wrapper(async ()=> {
     const query = parseInput(event, true);
     await validateTokenRequest(query);
     const list = new ListWrapper(query.list_id)
     let positionInfo = (await list.getIndexOfUser(query.id));
+    console.log(positionInfo)
     if(positionInfo.index !== -1) {
       await list.helpUser(query.id,0,event) //Gets first user
     } else {
@@ -439,11 +439,48 @@ export const helpFlaggedUser: APIGatewayProxyHandler = async (event, _context): 
     await list.helpFlagUser(query.id, query.studentName, query.message, event);
   });
 }
-// export const getFullList: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
-//   //TODO check if in list and remove if different
-//   //Join list
-//   //Inform relevant parties
-// }
+
+export const selfAddClass: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
+  return wrapper(async ()=> {
+    const query = parseInput(event);
+    await validateTokenRequest(query);
+    validate(query.classCode,'string','classCode',10,10)
+    const request: DynamoDBScanParams  = {
+      TableName: process.env.CLASS_TABLE,
+      ProjectionExpression: "id, userCode, taCode, adminCode",
+      FilterExpression: 'userCode = :t or taCode = :t or adminCode = :t',
+      ExpressionAttributeValues: {
+        ":t": query.classCode
+      }
+    }
+    let classes: ClassObj[] = await performScan(request);
+    if(classes.length === 0) {
+      throw new GeneratedError(ErrorTypes.InvalidInput);
+    }
+    let givenClass = classes[0];
+    const newPermissionLevel: PermissionLevel = givenClass.userCode === query.classCode ? PermissionLevel.Student : givenClass.taCode === query.classCode ? PermissionLevel.TA : givenClass.adminCode === query.classCode ? PermissionLevel.Professor : -1;
+    const userParams: DynamoDBGetParams = {
+      TableName: process.env.USER_TABLE,
+      Key: {id: query.id},
+      ProjectionExpression: "classes"
+    };
+    const existingUser = await performGet(userParams);
+    if(existingUser && existingUser.classes.includes(givenClass.id)) {
+      throw new GeneratedError(ErrorTypes.UserAlreadyInClass);
+    }
+    await addExistingUserToClass(givenClass.id,query.id,newPermissionLevel);
+    await addClassToUser(query.id,givenClass.id);
+  });
+}
+
+export const getFullOverview: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
+  return wrapper(async ()=> {
+    const query = parseInput(event, true);
+    await validateTokenRequest(query);
+    const list = new ListWrapper(query.list_id)
+    await list.getFullOverview(query.id, event);
+  });
+}
 
 const parseInput = (event, websocket = false) => {
   try {
@@ -456,5 +493,4 @@ const parseInput = (event, websocket = false) => {
     throw new GeneratedError(ErrorTypes.InvalidInput);
   }
 }
-
 
