@@ -30,7 +30,8 @@ interface List {
     creatorId: string,
     listName: string,
     totalStudentsHelped: number,
-    totalWaitTime: number
+    totalEndTime: number,
+    totalStartTime: number
 }
 
 export interface UserPositionInfo {
@@ -100,7 +101,7 @@ export class ListWrapper {
         return data;
     }
 
-    async getUserPermissionLevel(userId: string, required: PermissionLevel, helpingUser: boolean, flaggingUser: boolean, helpingFlaggedUser: boolean) {
+    async getUserPermissionLevel(userId: string, required: PermissionLevel, helpingUser: boolean, flaggingUser: boolean, helpingFlaggedUser: boolean, helpingUserIndex?: number) {
             const list = await this.getList('listUsers, observers');
             const listIndex = list.listUsers.findIndex(value=>value.id === userId);
             const observerIndex = list.observers.findIndex(value=>value.id === userId);
@@ -120,7 +121,7 @@ export class ListWrapper {
                 TableName: process.env.SESSION_TABLE,
                 Key: {id: this.id},
                 UpdateExpression: `set #listName[${Math.max(listIndex,observerIndex)}].timedEventTime = :currentTime` +(helpingUser ? `, #listName[${Math.max(listIndex,observerIndex)}].helpedStudents = if_not_exists(#listName[${Math.max(listIndex,observerIndex)}].helpedStudents, :start) + :one`:'')+(flaggingUser ? `, #listName[${Math.max(listIndex,observerIndex)}].flaggedStudents = if_not_exists(#listName[${Math.max(listIndex,observerIndex)}].flaggedStudents, :start) + :one`:'')+(helpingFlaggedUser ? `, #listName[${Math.max(listIndex,observerIndex)}].helpedFlaggedStudents = if_not_exists(#listName[${Math.max(listIndex,observerIndex)}].helpedFlaggedStudents, :start) + :one`:''),
-                ConditionExpression: `attribute_not_exists(#listName[${Math.max(listIndex,observerIndex)}].timedEventTime) or #listName[${Math.max(listIndex,observerIndex)}].timedEventTime < :cutoffTime`,
+                ConditionExpression: `(attribute_not_exists(#listName[${Math.max(listIndex,observerIndex)}].timedEventTime) or #listName[${Math.max(listIndex,observerIndex)}].timedEventTime < :cutoffTime)` + (helpingUser ? ` and (attribute_exists(listUsers[${helpingUserIndex}]))`:''),
                 ExpressionAttributeNames: {
                     '#listName': Math.max(listIndex,observerIndex) === observerIndex ? 'observers': 'listUsers'
                 },
@@ -134,6 +135,7 @@ export class ListWrapper {
             try {
                 await performUpdate(updateUser);
             } catch(e) {
+                console.log(e);
                 throw new GeneratedError(ErrorTypes.TooManyRequests);
             }
     }
@@ -213,17 +215,12 @@ export class ListWrapper {
     }
 
     async helpUser(helperId: string, indexOfUser: number, event: APIGatewayEvent, idOfUser?: string) {
-        await this.getUserPermissionLevel(helperId, PermissionLevel.TA,true,false,false);
-        const addStartTime: DynamoDBUpdateParams = {
-            TableName: process.env.SESSION_TABLE,
-            Key: {id: this.id},
-            UpdateExpression: `set totalWaitTime = totalWaitTime - listUsers[${indexOfUser}].startTime`
-        }
-        await performUpdate(addStartTime)
+        await this.getUserPermissionLevel(helperId, PermissionLevel.TA,true,false,false,indexOfUser);
+        //Update table accordingly
         const getNextUserParams: DynamoDBUpdateParams = {
             TableName: process.env.SESSION_TABLE,
             Key: {id: this.id},
-            UpdateExpression: `remove listUsers[${indexOfUser}] add version :one,totalStudentsHelped :one set totalWaitTime  = totalWaitTime + :time`,
+            UpdateExpression: `remove listUsers[${indexOfUser}] add version :one,totalStudentsHelped :one set totalStartTime = totalStartTime + listUsers[${indexOfUser}].startTime, totalEndTime = totalEndTime + :time`,
             // ConditionExpression: 'version = :currentVersion',
             ExpressionAttributeValues: {
                 ':one': 1,
@@ -236,7 +233,12 @@ export class ListWrapper {
             getNextUserParams.ConditionExpression = `listUsers[${indexOfUser}].id = :givenId`
             getNextUserParams.ExpressionAttributeValues[':givenId'] = idOfUser;
         }
-        const oldUser = await performUpdate(getNextUserParams) as {Attributes: List}
+        let oldUser;
+        try {
+            oldUser = await performUpdate(getNextUserParams) as {Attributes: List}
+        } catch(e) {
+            return; //List empty, return
+        }
         const currentInfo = await this.getList('observers, listUsers')
         const currentHelperIndex = currentInfo.observers.findIndex(value=>value.id === helperId)
         console.log('List '+this.id+' Helping User: '+oldUser.Attributes.listUsers[indexOfUser].id+' with name ' + oldUser.Attributes.listUsers[indexOfUser].fullName + ' by TA '+currentInfo.observers[currentHelperIndex].id+ ' with name '+currentInfo.observers[currentHelperIndex].fullName);
@@ -339,7 +341,7 @@ export class ListWrapper {
     }
 
     async sendReportEmail(): Promise<void> {
-        const list = await this.getList('creatorId, observers, listName, totalStudentsHelped, totalWaitTime');
+        const list = await this.getList('creatorId, observers, listName, totalStudentsHelped, totalStartTime, totalEndTime');
         const userParams: DynamoDBGetParams = {
             TableName: process.env.USER_TABLE,
             Key: {id: list.creatorId},
@@ -352,7 +354,7 @@ export class ListWrapper {
             The following TAs helped/demoed, flagged, or helped a flagged student at least once:
 
         `;
-        textBody+=`The average wait time was ${millisToMinutesAndSeconds(list.totalWaitTime/list.totalStudentsHelped)} and the total number of students helped was ${list.totalStudentsHelped}`;
+        textBody+=`The average wait time was ${millisToMinutesAndSeconds((list.totalEndTime - list.totalStartTime)/list.totalStudentsHelped)} and the total number of students helped was ${list.totalStudentsHelped}`;
         for(let tas of list.observers) {
             textBody += `${tas.fullName} helped ${tas.helpedStudents ? tas.helpedStudents : 0} student(s), flagged ${tas.flaggedStudents ? tas.flaggedStudents : 0} student(s), and helped flagged students ${tas.helpedFlaggedStudents ? tas.helpedFlaggedStudents : 0} time(s)\n`
             textBody += `This TA first joined the list at ${new Date(tas.startTime).toLocaleTimeString('en-us',{ hour: 'numeric', minute: 'numeric', hour12: true, timeZone: 'America/Chicago' })} and helped/flagged their last user at ${tas.timedEventTime ? new Date(tas.timedEventTime).toLocaleTimeString('en-us',{ hour: 'numeric', minute: 'numeric', hour12: true, timeZone: 'America/Chicago' }): 'Undefined'}\n\n`
@@ -365,7 +367,7 @@ export class ListWrapper {
             <body>
                 <h3>Report for ${list.listName} on ${new Date().toLocaleDateString('en-us',{ weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}  at ${new Date().toLocaleString('en-us',{ hour: 'numeric', minute: 'numeric', hour12: true, timeZone: 'America/Chicago' })}</h3>
                 <p>The following TAs helped/demoed, flagged, or helped a flagged student at least once:</p>`;
-            htmlBody+=`<p> The average wait time was ${millisToMinutesAndSeconds(list.totalWaitTime/list.totalStudentsHelped)} and the total number of students helped was ${list.totalStudentsHelped}</p>`
+            htmlBody+=`<p> The average wait time was ${millisToMinutesAndSeconds((list.totalEndTime - list.totalStartTime)/list.totalStudentsHelped)} and the total number of students helped was ${list.totalStudentsHelped}</p>`
             htmlBody+=`
                 <table>
                     <tr><th>Name</th><th>Helped Students</th><th>Flagged Students</th><th>Helped Flagged Students</th><th>Start Time</th><th>Last Action Time</th></tr>`;
@@ -401,7 +403,8 @@ export const createList = async (classId: string, creatorId: string, listName: s
         version: 0,
         creatorId,
         listName,
-        totalWaitTime: 0,
+        totalStartTime: 0,
+        totalEndTime: 0,
         totalStudentsHelped: 0
     }
     const createListParams: DynamoDBPutParams = {
