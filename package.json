@@ -7,21 +7,21 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "Alex Baker",
-  "license": "UNLICENSED",
+  "license": "ALL RIGHTS RESERVED",
   "dependencies": {
-    "aws-sdk": "^2.401.0",
+    "aws-sdk": "^2.597.0",
     "bcryptjs": "^2.4.3",
     "node-fetch": "^2.6.0",
     "rand-token": "^0.4.0",
-    "serverless": "^1.58.0",
-    "source-map-support": "^0.5.10"
+    "serverless": "^1.60.4",
+    "source-map-support": "^0.5.16"
   },
   "devDependencies": {
-    "@types/aws-lambda": "^8.10.17",
-    "@types/node": "^10.12.18",
-    "serverless-webpack": "^5.2.0",
+    "@types/aws-lambda": "^8.10.39",
+    "@types/node": "^10.17.13",
+    "serverless-webpack": "^5.3.1",
     "ts-loader": "^5.3.3",
-    "typescript": "^3.2.4",
-    "webpack": "^4.29.0"
+    "typescript": "^3.7.4",
+    "webpack": "^4.41.5"
   }
 }
