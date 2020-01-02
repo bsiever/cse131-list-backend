@@ -1,3 +1,5 @@
+import { APIGatewayProxyEvent } from "aws-lambda";
+
 export interface Response {
     statusCode: number,
     headers: Object,
@@ -49,10 +51,23 @@ const failedResponse = (errorCode: ErrorTypes): Response => {
         body: JSON.stringify({errorCode})
     }
 }
-
-export const wrapper = async (a: ()=>any): Promise<Response> => {
+const parseInput = (event, websocket = false) => {
     try {
-        const result = await a();
+      const query = JSON.parse(event.body);
+      if(query === null || typeof query !== 'object') {
+        throw new GeneratedError(ErrorTypes.InvalidInput);
+      }
+      return websocket ? query.data : query;
+    } catch (e) {
+      throw new GeneratedError(ErrorTypes.InvalidInput);
+    }
+}
+  
+
+export const wrapper = async (event: APIGatewayProxyEvent, websocket: boolean, a: (query)=>any): Promise<Response> => {
+    try {
+        const query = parseInput(event, websocket);
+        const result = await a(query);
         return successfulResponse({data:result});
     } catch (e) {
         console.log(e) //Remove in production
@@ -63,3 +78,4 @@ export const wrapper = async (a: ()=>any): Promise<Response> => {
         }
     }
 }
+

@@ -13,18 +13,26 @@ import { sendMessageToUser, WebSocketMessages } from './utility/websocket';
 
 const randtoken = require('rand-token');
 
-//Checked
+/*
+  Login Wrapper for the Login Function
+  All functionality handled through utility/security.ts
+
+  client_code: string
+*/
 export const login: APIGatewayProxyHandler = async (event: APIGatewayProxyEvent):  Promise<any> => {
-  return wrapper(async ()=>{
-    const query = parseInput(event)
+  return wrapper(event, false, async query=>{
     return await validateLoginRequest(query);
   });
 }
 
-//Checked
+/*
+  Logout Function
+
+  id: string
+  userToken: string
+*/
 export const logout: APIGatewayProxyHandler = async (event: APIGatewayProxyEvent):  Promise<any> => {
-  return wrapper(async ()=>{
-    const query = parseInput(event)
+  return wrapper(event, false, async query=>{
     await validateTokenRequest(query);
     await updateUser(query.id,"SET tokenTime = :t2",{":t2": 0});
   });
@@ -45,10 +53,18 @@ const addClassToUser = async (userId: string, classId: string) => {
   }
   await performUpdate(addToClass)
 }
-//Checked
+/*
+  Create a new class
+  Used by site adiministrators
+
+  This function creates a new class, and then adds the creating user to the class as a class administrator
+
+  id: string
+  userToken: string
+  className: string  1-50 characters
+*/
 export const createClass: APIGatewayProxyHandler = async (event: APIGatewayProxyEvent):  Promise<any> => {
-  return wrapper(async ()=> {
-    const query = parseInput(event)
+  return wrapper(event, false, async query=> {
     await validateTokenRequest(query,true);
     validate(query.className,"string","className",1,50)
     const newClass: ClassObj = {
@@ -69,20 +85,33 @@ export const createClass: APIGatewayProxyHandler = async (event: APIGatewayProxy
     await addClassToUser(query.id,newClass.id)
   });
 }
+/*
+  This deletes a class
+  Used by class administrators
 
+  This function is complex, as it must deconstruct every part of the class. First, it removes the class from
+  the users' profiles, preventing any new commands from being run. It then deletes the actual class.
+
+  TODO delete all active sessions
+  TODO prevent race condition with other administrators performing actions
+
+  id: string
+  userToken: string
+  changingClass: string
+
+*/
 export const deleteClass: APIGatewayProxyHandler = async (event: APIGatewayProxyEvent):  Promise<any> => {
-  return wrapper(async ()=> {
-    const query = parseInput(event)
+  return wrapper(event, false, async query=> {
     await validateTokenRequest(query);
     await checkClassPermissions(query.id,query.changingClass,PermissionLevel.Professor)
     const getUsers: DynamoDBGetParams = {
       TableName: process.env.CLASS_TABLE,
       Key: {id: query.changingClass},
-      ProjectionExpression: 'classUsers'
+      ProjectionExpression: 'classUsers, sessions'
     }
-    const classUsers: ClassObj = await performGet(getUsers)
+    const classUsersAndSessions: ClassObj = await performGet(getUsers)
     //Delete class from users
-    await Promise.all(Object.keys(classUsers.classUsers).map(async user => {
+    await Promise.all(Object.keys(classUsersAndSessions.classUsers).map(async user => {
       //Copied from createUpdateClassMembership consolodate
       const getRemovedUser: DynamoDBGetParams = {
         TableName: process.env.USER_TABLE,
@@ -103,7 +132,14 @@ export const deleteClass: APIGatewayProxyHandler = async (event: APIGatewayProxy
       }
       await performUpdate(removeClassEnrollment)
     }));
-    //TODO delete all appropriate sessions
+    //Close all active sessions
+    await Promise.all(Object.values(classUsersAndSessions.sessions).map(async (session)=>{
+      await Promise.all(Object.keys(session.lists).map(async list_name => {
+        const list = new ListWrapper(list_name)
+        await list.closeList(event)
+      }));
+    }));
+
     const deleteRequest: DynamoDBDeleteParams = {
       TableName: process.env.CLASS_TABLE,
       Key: {id: query.changingClass}
@@ -111,10 +147,26 @@ export const deleteClass: APIGatewayProxyHandler = async (event: APIGatewayProxy
     await performDelete(deleteRequest)
   });
 }
-//This is good because professor for class doesn't need to know what other classes a student is in(and shouldn't know)
+/*
+  This adds a (potentially non-existant) user to a class, updates that user's status, or removes them.
+  Requires class admin access
+
+  This function adds a user to a class, updates a status, or removes them. If adding a user and the user
+  already exists, it simply updates their status, else it creates an entirely new user and then adds that
+  new user to the class. This is done so that class administrators cannot determine if a potential user
+  already exists on the site, and therefore is part of another class. 
+
+  id: string
+  userToken: string
+  changingClass: string
+  removeUser: boolean
+  subjectUsername: string 1-50 characters
+  newPermissionLevel?: number - PermissionLevel
+  subjectName?: string
+
+*/
 export const createUpdateClassMembership: APIGatewayProxyHandler = async (event: APIGatewayProxyEvent):  Promise<any> => {
-  return wrapper(async ()=> {
-    const query = parseInput(event)
+  return wrapper(event, false, async query=> {
     await validateTokenRequest(query);
     validate(query.changingClass,'string','changingClass',32,32)
     validate(query.removeUser,'boolean','removeUser')
@@ -168,9 +220,22 @@ export const createUpdateClassMembership: APIGatewayProxyHandler = async (event:
   });
 }
 
+/*
+  This function updates the admin status of a (potentially non-existant) user
+  Requires site admin access
+
+  Note that if the user does not exist, but the newAdminStatus is set to false, this will create a user with no
+  permission and no class association.
+
+  id: string
+  userToken: string
+  newAdminStatus: boolean
+  subjectUsername: string
+  subjectName: string
+  
+*/
 export const createUpdateAdminStatus: APIGatewayProxyHandler = async (event: APIGatewayProxyEvent):  Promise<any> => {
-  return wrapper(async ()=> {
-    const query = parseInput(event)
+  return wrapper(event, false, async query=> {
     validate(query.newAdminStatus,'boolean','newAdminStatus')
     validate(query.subjectUsername,"string","subjectUsername",1,50)
     await validateTokenRequest(query,true);
@@ -185,8 +250,7 @@ export const createUpdateAdminStatus: APIGatewayProxyHandler = async (event: API
 }
 
 export const getAdminInfo: APIGatewayProxyHandler = async (event: APIGatewayProxyEvent): Promise<any> => {
-  return wrapper(async ()=> {
-    const query = parseInput(event)
+  return wrapper(event, false, async query=> {
     await validateTokenRequest(query, true);
     const request: DynamoDBScanParams  = {
       TableName: process.env.USER_TABLE,
@@ -203,8 +267,7 @@ export const getAdminInfo: APIGatewayProxyHandler = async (event: APIGatewayProx
 
 
 export const getClassInfo: APIGatewayProxyHandler = async (event: APIGatewayProxyEvent): Promise<any> => {
-  return wrapper(async ()=> {
-    const query = parseInput(event)
+  return wrapper(event, false, async query=> {
     await validateTokenRequest(query);
     await checkClassPermissions(query.id,query.classId,PermissionLevel.Student)
     const request: DynamoDBGetParams  = {
@@ -220,8 +283,7 @@ export const getClassInfo: APIGatewayProxyHandler = async (event: APIGatewayProx
 }
 
 export const getClassAdminInfo: APIGatewayProxyHandler = async (event: APIGatewayProxyEvent): Promise<any> => {
-  return wrapper(async ()=> {
-    const query = parseInput(event)
+  return wrapper(event, false, async query=> {
     await validateTokenRequest(query);
     await checkClassPermissions(query.id,query.classId,PermissionLevel.Professor)
     const request: DynamoDBGetParams  = {
@@ -245,8 +307,7 @@ export const getClassAdminInfo: APIGatewayProxyHandler = async (event: APIGatewa
 }
 
 export const refreshUserInfo: APIGatewayProxyHandler = async (event: APIGatewayProxyEvent): Promise<any> => {
-  return wrapper(async ()=> {
-    const query = parseInput(event);
+  return wrapper(event, false, async query=> {
     await validateTokenRequest(query);
     const request: DynamoDBGetParams = {
       TableName: process.env.USER_TABLE,
@@ -264,8 +325,7 @@ export const refreshUserInfo: APIGatewayProxyHandler = async (event: APIGatewayP
 }
 
 export const setUserInfo: APIGatewayProxyHandler = async (event: APIGatewayProxyEvent): Promise<any> => {
-  return wrapper(async ()=> {
-    const query = parseInput(event);
+  return wrapper(event, false, async query=> {
     await validateTokenRequest(query);
     await validate(query.newName,'string','newName',1,50);
     // const existingUser = await getUserByUsername(query.newUsername,true)
@@ -285,8 +345,7 @@ export const setUserInfo: APIGatewayProxyHandler = async (event: APIGatewayProxy
 }
 
 export const setClassName: APIGatewayProxyHandler = async (event: APIGatewayProxyEvent): Promise<any> => {
-  return wrapper(async ()=> {
-    const query = parseInput(event);
+  return wrapper(event, false, async query=> {
     await validateTokenRequest(query);
     await checkClassPermissions(query.id,query.classId,PermissionLevel.Professor)
     validate(query.newClassName,'string','newClassName',1,50)
@@ -305,8 +364,7 @@ export const setClassName: APIGatewayProxyHandler = async (event: APIGatewayProx
 }
 
 export const createSession: APIGatewayProxyHandler = async (event: APIGatewayProxyEvent): Promise<any> => {
-  return wrapper(async ()=> {
-    const query = parseInput(event);
+  return wrapper(event, false, async query=> {
     await validateTokenRequest(query);
     await checkClassPermissions(query.id,query.classId,PermissionLevel.Professor)
     validate(query.newSessionName,'string','newSessionName',1,50)
@@ -341,8 +399,7 @@ export const createSession: APIGatewayProxyHandler = async (event: APIGatewayPro
 }
 
 export const closeSession: APIGatewayProxyHandler = async (event: APIGatewayProxyEvent): Promise<any> => {
-  return wrapper(async ()=> {
-    const query = parseInput(event);
+  return wrapper(event, false, async query=> {
     await validateTokenRequest(query);
     await checkClassPermissions(query.id,query.classId,PermissionLevel.Professor)
     validate(query.sessionId,'string','sessionId',32,32)
@@ -376,13 +433,10 @@ export const closeSession: APIGatewayProxyHandler = async (event: APIGatewayProx
 }
 
 export const helpNextUser: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
-  console.log(Date.now());
-  return wrapper(async ()=> {
-    const query = parseInput(event, true);
+  return wrapper(event, true, async query=> {
     await validateTokenRequest(query);
     const list = new ListWrapper(query.list_id)
     let positionInfo = (await list.getIndexOfUser(query.id));
-    console.log(positionInfo)
     if(positionInfo.index !== -1) {
       await list.helpUser(query.id,0,event) //Gets first user
     } else {
@@ -392,8 +446,7 @@ export const helpNextUser: APIGatewayProxyHandler = async (event, _context): Pro
 }
 
 export const joinList: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
-    return wrapper(async ()=> {
-      const query = parseInput(event, true);
+    return wrapper(event, true, async query=> {
       await validateTokenRequest(query);
       const list = new ListWrapper(query.list_id)
       let positionInfo;
@@ -414,8 +467,7 @@ export const joinList: APIGatewayProxyHandler = async (event, _context): Promise
 }
 
 export const leaveList: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
-  return wrapper(async ()=> {
-    const query = parseInput(event, true);
+  return wrapper(event, true, async query=> {
     await validateTokenRequest(query);
     const list = new ListWrapper(query.list_id)
     await list.removeUserFromList(query.id, event);
@@ -423,8 +475,7 @@ export const leaveList: APIGatewayProxyHandler = async (event, _context): Promis
 }
 
 export const flagUser: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
-  return wrapper(async ()=> {
-    const query = parseInput(event, true);
+  return wrapper(event, true, async query=> {
     await validateTokenRequest(query);
     const list = new ListWrapper(query.list_id)
     await list.flagUser(query.id, query.studentName, query.message, event);
@@ -432,8 +483,7 @@ export const flagUser: APIGatewayProxyHandler = async (event, _context): Promise
 }
 
 export const helpFlaggedUser: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
-  return wrapper(async ()=> {
-    const query = parseInput(event, true);
+  return wrapper(event, true, async query=> {
     await validateTokenRequest(query);
     const list = new ListWrapper(query.list_id)
     await list.helpFlagUser(query.id, query.studentName, query.message, event);
@@ -441,8 +491,7 @@ export const helpFlaggedUser: APIGatewayProxyHandler = async (event, _context): 
 }
 
 export const selfAddClass: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
-  return wrapper(async ()=> {
-    const query = parseInput(event);
+  return wrapper(event, false, async query=> {
     await validateTokenRequest(query);
     validate(query.classCode,'string','classCode',10,10)
     const request: DynamoDBScanParams  = {
@@ -474,23 +523,11 @@ export const selfAddClass: APIGatewayProxyHandler = async (event, _context): Pro
 }
 
 export const getFullOverview: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
-  return wrapper(async ()=> {
-    const query = parseInput(event, true);
+  return wrapper(event, true, async query=> {
     await validateTokenRequest(query);
     const list = new ListWrapper(query.list_id)
     await list.getFullOverview(query.id, event);
   });
 }
 
-const parseInput = (event, websocket = false) => {
-  try {
-    const query = JSON.parse(event.body);
-    if(query === null || typeof query !== 'object') {
-      throw new GeneratedError(ErrorTypes.InvalidInput);
-    }
-    return websocket ? query.data : query;
-  } catch (e) {
-    throw new GeneratedError(ErrorTypes.InvalidInput);
-  }
-}
 
