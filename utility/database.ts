@@ -5,7 +5,7 @@ const dynamo = new AWS.DynamoDB.DocumentClient();
 
 interface DynamoDBRetrievalParams {
     TableName: string,
-    ProjectionExpression: string,
+    ProjectionExpression?: string,
     IndexName?: string,
     ExpressionAttributeNames?: object,
     ConsistentRead?: boolean;
@@ -84,7 +84,9 @@ export const performPut = async (request: DynamoDBPutParams): Promise<any> => {
 export interface DynamoDBDeleteParams {
     TableName: string,
     Key: object,
-    ReturnValues?: string
+    ReturnValues?: string,
+    ConditionExpression?: string,
+    ExpressionAttributeValues?: object,
 }
 
 export const performDelete = async (request: DynamoDBDeleteParams): Promise<any> => {

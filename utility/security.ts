@@ -205,7 +205,7 @@ export const createUser = async (username: string, isAdmin: boolean, name: strin
     validate(name,'string','name',1,50)
     const newUser: User = {
         id: randtoken.generate(32),
-        username: username,
+        username: username.toLowerCase(),
         admin: isAdmin,
         tokenTime: 0,
         classes: newClass ? [newClass]: [],

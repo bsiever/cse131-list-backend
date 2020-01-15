@@ -349,7 +349,7 @@ export class ListWrapper {
         };
         const creator = await performGet(userParams);
         let textBody = `
-            Report for ${list.listName} on ${new Date().toLocaleDateString('en-us',{ weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} at ${new Date().toLocaleString('en-us',{ hour: 'numeric', minute: 'numeric', hour12: true, timeZone: 'America/Chicago' })},
+            Report for ${list.listName} on ${new Date().toLocaleDateString('en-us',{ weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',timeZone: 'America/Chicago' })} at ${new Date().toLocaleString('en-us',{ hour: 'numeric', minute: 'numeric', hour12: true, timeZone: 'America/Chicago' })},
 
             The following TAs helped/demoed, flagged, or helped a flagged student at least once:
 
@@ -365,7 +365,7 @@ export class ListWrapper {
             <head>
             </head>
             <body>
-                <h3>Report for ${list.listName} on ${new Date().toLocaleDateString('en-us',{ weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}  at ${new Date().toLocaleString('en-us',{ hour: 'numeric', minute: 'numeric', hour12: true, timeZone: 'America/Chicago' })}</h3>
+                <h3>Report for ${list.listName} on ${new Date().toLocaleDateString('en-us',{ weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',timeZone: 'America/Chicago' })}  at ${new Date().toLocaleString('en-us',{ hour: 'numeric', minute: 'numeric', hour12: true, timeZone: 'America/Chicago' })}</h3>
                 <p>The following TAs helped/demoed, flagged, or helped a flagged student at least once:</p>`;
             htmlBody+=`<p> The average wait time was ${millisToMinutesAndSeconds((list.totalEndTime - list.totalStartTime)/list.totalStudentsHelped)} and the total number of students helped was ${list.totalStudentsHelped}</p>`
             htmlBody+=`

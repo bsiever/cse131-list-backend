@@ -2,12 +2,13 @@ service: cse131-help
 
 provider:
   name: aws
-  runtime: nodejs8.10
+  runtime: nodejs12.x
   stage: ${opt:stage, 'dev'}
   environment:
     USER_TABLE: ${self:service.name}-user-${self:provider.stage}
     CLASS_TABLE: ${self:service.name}-class-${self:provider.stage}
     SESSION_TABLE: ${self:service.name}-session-${self:provider.stage}
+    SCHEDULE_TABLE: ${self:service.name}-schedule-${self:provider.stage}
     CLIENT_ID: '9765e58690fb0cd32bd4'
     CLIENT_SECRET: '09ccdabea643630b3316fcbb547f01be3a69a410'
   websocketsApiName: ${self:service.name}-websocketapi
@@ -148,6 +149,38 @@ functions:
           path: selfAddClass
           method: post
           cors: true
+  startStopScheduledSessions:
+    handler: handler.startStopScheduledSessions
+    events:
+      - schedule: cron(10,25,40,55 * * * ? *)
+  addScheduledSession:
+    handler: handler.addScheduledSession
+    events:
+      - http:
+          path: addScheduledSession
+          method: post
+          cors: true
+  removeScheduledSession:
+    handler: handler.removeScheduledSession
+    events:
+      - http:
+          path: removeScheduledSession
+          method: post
+          cors: true
+  updateScheduledSession:
+    handler: handler.updateScheduledSession
+    events:
+      - http:
+          path: updateScheduledSession
+          method: post
+          cors: true
+  getScheduleForClass:
+    handler: handler.getScheduleForClass
+    events:
+      - http:
+          path: getScheduleForClass
+          method: post
+          cors: true
   # connectionHandler:
   #   handler: handler.connectionHandler
   #   events:
@@ -240,3 +273,23 @@ resources:
           - AttributeName: id
             KeyType: HASH
         BillingMode: PAY_PER_REQUEST
+    scheduledSessions:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.SCHEDULE_TABLE}
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: classId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        BillingMode: PAY_PER_REQUEST
+        GlobalSecondaryIndexes:
+        - IndexName: by_class_id
+          KeySchema:
+            - AttributeName: classId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
