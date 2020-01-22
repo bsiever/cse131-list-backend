@@ -152,7 +152,7 @@ functions:
   startStopScheduledSessions:
     handler: handler.startStopScheduledSessions
     events:
-      - schedule: cron(10,25,40,55 * * * ? *)
+      - schedule: cron(4/5 * * * ? *)
   addScheduledSession:
     handler: handler.addScheduledSession
     events:

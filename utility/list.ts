@@ -31,7 +31,8 @@ interface List {
     listName: string,
     totalStudentsHelped: number,
     totalEndTime: number,
-    totalStartTime: number
+    totalStartTime: number,
+    estimatedWaitTime: number
 }
 
 export interface UserPositionInfo {
@@ -63,7 +64,7 @@ export class ListWrapper {
     }
     async addUser(userId: string, connectionId: string, event: APIGatewayEvent): Promise<UserPositionInfo> {
         console.log('Adding user '+ userId + ' to list ' + this.id);
-        const listObj = await this.getList('classId');
+        const listObj = await this.getList('classId, estimatedWaitTime');
         const permissionLevel = await checkClassPermissions(userId, listObj.classId,PermissionLevel.Student);
         const getUserFullName: DynamoDBGetParams = {
             TableName: process.env.USER_TABLE,
@@ -93,7 +94,7 @@ export class ListWrapper {
         }
         const newList = await performUpdate(addUser) as {Attributes: List}
         await this.updateUsers(event);
-        const data = {totalNumber: -1, flaggedUsers: {}, index: (newList.Attributes[permissionLevel === PermissionLevel.Student ? 'listUsers' : 'observers']).findIndex(value=>value.id === userId), observer: permissionLevel > PermissionLevel.Student, listId: this.id, version: newList.Attributes.version}
+        const data = {totalNumber: -1, flaggedUsers: {}, index: (newList.Attributes[permissionLevel === PermissionLevel.Student ? 'listUsers' : 'observers']).findIndex(value=>value.id === userId), observer: permissionLevel > PermissionLevel.Student, listId: this.id, version: newList.Attributes.version,estimatedWaitTime: listObj.estimatedWaitTime}
         if(data.observer) {
             data.totalNumber = newList.Attributes.listUsers.length;
             data.flaggedUsers = newList.Attributes.flaggedUsers;
@@ -176,7 +177,8 @@ export class ListWrapper {
             ReturnValues: 'ALL_NEW'
         }
         const list = await performUpdate(updateUser) as {Attributes: List};
-        return {totalNumber: list.Attributes.listUsers.length, flaggedUsers: list.Attributes.flaggedUsers};
+        const listObj = await this.getList('estimatedWaitTime');
+        return {totalNumber: list.Attributes.listUsers.length, flaggedUsers: list.Attributes.flaggedUsers, estimatedWaitTime: listObj.estimatedWaitTime};
     }
 
     async getIndexOfUser(userId: string): Promise<UserPositionInfo>  {
@@ -220,7 +222,7 @@ export class ListWrapper {
         const getNextUserParams: DynamoDBUpdateParams = {
             TableName: process.env.SESSION_TABLE,
             Key: {id: this.id},
-            UpdateExpression: `remove listUsers[${indexOfUser}] add version :one,totalStudentsHelped :one set totalStartTime = totalStartTime + listUsers[${indexOfUser}].startTime, totalEndTime = totalEndTime + :time`,
+            UpdateExpression: `remove listUsers[${indexOfUser}] add version :one,totalStudentsHelped :one set totalStartTime = totalStartTime + listUsers[${indexOfUser}].startTime, totalEndTime = totalEndTime + :time, estimatedWaitTime = (:time - listUsers[${indexOfUser}].startTime)`,
             // ConditionExpression: 'version = :currentVersion',
             ExpressionAttributeValues: {
                 ':one': 1,
@@ -260,12 +262,12 @@ export class ListWrapper {
     //This function updates all users and observers of changes in the list
     //This function does not wait
     async updateUsers(event: APIGatewayEvent) {
-        const listInfo = await this.getList('listUsers, observers, version, flaggedUsers')
+        const listInfo = await this.getList('listUsers, observers, version, flaggedUsers, estimatedWaitTime')
         await Promise.all(listInfo.listUsers.map((user, index)=> {
-            return sendMessageToUser(user.id, user.connectionId, {index, observer: false, listId: this.id, version: listInfo.version},WebSocketMessages.SetPosition,event,this);
+            return sendMessageToUser(user.id, user.connectionId, {index, observer: false, listId: this.id, version: listInfo.version,estimatedWaitTime: listInfo.estimatedWaitTime},WebSocketMessages.SetPosition,event,this);
         }))
         await Promise.all(listInfo.observers.map((user)=> {
-           return sendMessageToUser(user.id, user.connectionId, {observer: true, listId: this.id, totalNumber: listInfo.listUsers.length, version: listInfo.version, flaggedUsers: listInfo.flaggedUsers},WebSocketMessages.UpdateListStatus,event,this);
+           return sendMessageToUser(user.id, user.connectionId, {observer: true, listId: this.id, totalNumber: listInfo.listUsers.length, version: listInfo.version, flaggedUsers: listInfo.flaggedUsers,estimatedWaitTime: listInfo.estimatedWaitTime},WebSocketMessages.UpdateListStatus,event,this);
         }))
     }
 
@@ -405,7 +407,8 @@ export const createList = async (classId: string, creatorId: string, listName: s
         listName,
         totalStartTime: 0,
         totalEndTime: 0,
-        totalStudentsHelped: 0
+        totalStudentsHelped: 0,
+        estimatedWaitTime: 0
     }
     const createListParams: DynamoDBPutParams = {
         TableName: process.env.SESSION_TABLE,

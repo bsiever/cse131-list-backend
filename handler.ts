@@ -534,7 +534,7 @@ export const getFullOverview: APIGatewayProxyHandler = async (event, _context): 
 /*Scheduled function(s)*/
 
 const daysOfWeek = {Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6};
-const offset = 15; //Minutes between call assumes, always less than 60
+const offset = 5; //Minutes between call assumes, always less than 60
 
 export const startStopScheduledSessions: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
   const getAllScheduledEvents: DynamoDBScanParams = {
@@ -561,13 +561,13 @@ export const startStopScheduledSessions: APIGatewayProxyHandler = async (event, 
         if(hour == 23 && minute+offset>=60 && e.startHour == 23 && e.startMinute >= minute) {
           console.log('b');
           await scheduleEvent(e);
-        } else if((hour< e.startHour || (hour==e.startHour && minute<=e.startMinute)) && ((hour<e.startHour && (minute +offset -60 > e.startMinute))|| (hour==e.startHour && (minute+offset > e.startMinute)))) { //Make sure end after schedule
+        } else if((hour< e.startHour || (hour==e.startHour && minute<=e.startMinute)) && ((hour==e.startHour-1 && (minute +offset - 60 > e.startMinute))|| (hour==e.startHour && (minute+offset > e.startMinute)))) { //Make sure end after schedule
           console.log('c');
           await scheduleEvent(e);
         }
       }
       //Case where currently in previous day
-      if(day+1==7?0:day+1 == e.startDay && hour==23 && minute + offset >= 60) {
+      if((day+1==7?0:day+1) == e.startDay && hour==23 && minute + offset >= 60) {
         console.log('d');
         if(e.startHour == 0 && e.startMinute < offset + minute - 60) {
           console.log('e');
