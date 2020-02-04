@@ -106,7 +106,6 @@ export const validateLoginRequest = async (data: any): Promise<User> => {
 
     let userEmail = null;
     for(let email of emails) {
-        console.log(email);
         if(email.email.slice(-10).toLowerCase() === '@wustl.edu') {
             userEmail = email.email.toLowerCase();
             break;

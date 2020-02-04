@@ -547,50 +547,39 @@ export const startStopScheduledSessions: APIGatewayProxyHandler = async (event, 
   const day: number = daysOfWeek[dayOfWeek];
   const hour:number = Number(date.toLocaleString("en-US", {timeZone: "America/Chicago", hour: '2-digit',hour12: false}).substring(0,2));
   const minute: number = Number(date.toLocaleString("en-US", {timeZone: "America/Chicago", minute: '2-digit',hour12: false}).substring(0,2));
-  console.log(day)
-  console.log(hour)
-  console.log(minute)
   for(let e of scheduledEvents) {
-    console.log(e);
+    
     try { //Handle errors without crashing function
       //Check if need to be scheduled
       //Handle case when start in same day
       if(day == e.startDay) {
-        console.log('a');
         //End in next day
         if(hour == 23 && minute+offset>=60 && e.startHour == 23 && e.startMinute >= minute) {
-          console.log('b');
           await scheduleEvent(e);
         } else if((hour< e.startHour || (hour==e.startHour && minute<=e.startMinute)) && ((hour==e.startHour-1 && (minute +offset - 60 > e.startMinute))|| (hour==e.startHour && (minute+offset > e.startMinute)))) { //Make sure end after schedule
-          console.log('c');
           await scheduleEvent(e);
         }
       }
       //Case where currently in previous day
       if((day+1==7?0:day+1) == e.startDay && hour==23 && minute + offset >= 60) {
-        console.log('d');
         if(e.startHour == 0 && e.startMinute < offset + minute - 60) {
-          console.log('e');
           await scheduleEvent(e);
         }
       }
       //Check if need to be closed
       if(e.sessionId) {
-        console.log('f');
         //In next day, know end time has passed, close
         if(e.endDay+1==7?0:day+1 == day && hour==23 && minute + offset >= 60) {
-          console.log('g');
           await closeScheduledSession(e,event);
         }
         if(day == e.endDay) {
-          console.log('h');
           if(e.endHour < hour || (e.endHour==hour && e.endMinute < minute)) {
-            console.log('i');
             await closeScheduledSession(e,event);
           }
         }
       }
     } catch(e) {
+      console.log("ERROR: ");
       console.log(e);
     }
   }

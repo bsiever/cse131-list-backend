@@ -343,7 +343,9 @@ export class ListWrapper {
     }
 
     async sendReportEmail(): Promise<void> {
+       
         const list = await this.getList('creatorId, observers, listName, totalStudentsHelped, totalStartTime, totalEndTime');
+        console.log('Sending report email to '+list.creatorId);
         const userParams: DynamoDBGetParams = {
             TableName: process.env.USER_TABLE,
             Key: {id: list.creatorId},
@@ -384,6 +386,7 @@ export class ListWrapper {
             </body>
         </html>
         `
+        console.log('send email'+creator.username)
         await sendEmail(creator.username, `Report for `+list.listName,textBody,htmlBody)
     }
     

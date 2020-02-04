@@ -35,8 +35,6 @@ export const scheduleEvent = async (input: DatabaseScheduledEvent) => {
         result[newList.id] = name
         return result
     }))
-    console.log(classInfo);
-    console.log(newListArray);
     //https://stackoverflow.com/questions/27538349/merge-multiple-objects-inside-the-same-array-into-one-object
     const newListObj = newListArray.reduce(((r, c) => Object.assign(r, c)), {})
     const newSessionId = randtoken.generate(32)
