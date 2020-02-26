@@ -9,19 +9,19 @@
   "author": "Alex Baker",
   "license": "ALL RIGHTS RESERVED",
   "dependencies": {
-    "aws-sdk": "^2.597.0",
+    "aws-sdk": "^2.613.0",
     "bcryptjs": "^2.4.3",
     "node-fetch": "^2.6.0",
     "rand-token": "^0.4.0",
-    "serverless": "^1.60.4",
+    "serverless": "^1.63.0",
     "source-map-support": "^0.5.16"
   },
   "devDependencies": {
-    "@types/aws-lambda": "^8.10.39",
-    "@types/node": "^10.17.13",
+    "@types/aws-lambda": "^8.10.40",
+    "@types/node": "^10.17.14",
     "serverless-webpack": "^5.3.1",
     "ts-loader": "^5.3.3",
-    "typescript": "^3.7.4",
+    "typescript": "^3.7.5",
     "webpack": "^4.41.5"
   }
 }

@@ -327,7 +327,6 @@ export const sendEmail = async (to: string, subject: string, textBody: string, h
 
 /*Class functions*/
 
-//TODO check if dynamodb actually returns maps and sets, or just objects
 const getClassPermissions = async (id: string, classId: string): Promise<PermissionLevel> => {
     validate(id,"string","id",32,32)
     validate(classId,"string","classId",32,32)
