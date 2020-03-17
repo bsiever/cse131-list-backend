@@ -26,11 +26,11 @@ export const scheduleEvent = async (input: DatabaseScheduledEvent) => {
     const getClassInfoParams: DynamoDBGetParams = {
         TableName: process.env.CLASS_TABLE,
         Key: {id: input.classId},
-        ProjectionExpression: 'className',
+        ProjectionExpression: 'className,remoteMode',
     }
     const classInfo = await performGet(getClassInfoParams) as ClassObj
     const newListArray = await Promise.all(input.startingLists.map(async name => {
-        const newList = await createList(input.classId,input.creatorId,'List '+name+' in Class '+classInfo.className);
+        const newList = await createList(input.classId,input.creatorId,'List '+name+' in Class '+classInfo.className,classInfo.remoteMode);
         const result = {}
         result[newList.id] = name
         return result

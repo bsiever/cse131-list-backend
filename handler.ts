@@ -75,7 +75,8 @@ export const createClass: APIGatewayProxyHandler = async (event: APIGatewayProxy
       userCode: randtoken.generate(10),
       taCode: randtoken.generate(10),
       adminCode: randtoken.generate(10),
-      sessions: {}
+      sessions: {},
+      remoteMode: false
     }
     newClass.classUsers[query.id] = PermissionLevel.Professor
     const createClassQuery: DynamoDBPutParams = {
@@ -274,7 +275,7 @@ export const getClassInfo: APIGatewayProxyHandler = async (event: APIGatewayProx
     const request: DynamoDBGetParams  = {
       TableName: process.env.CLASS_TABLE,
       Key: {id: query.classId},
-      ProjectionExpression: "classUsers.#givenUser, sessions",
+      ProjectionExpression: "classUsers.#givenUser, sessions, remoteMode",
       ExpressionAttributeNames: {
         "#givenUser": query.id
       }
@@ -364,6 +365,25 @@ export const setClassName: APIGatewayProxyHandler = async (event: APIGatewayProx
   })
 }
 
+export const setRemoteMode: APIGatewayProxyHandler = async (event: APIGatewayProxyEvent): Promise<any> => {
+  return wrapper(event, false, async query=> {
+    await validateTokenRequest(query);
+    await checkClassPermissions(query.id,query.classId,PermissionLevel.Professor)
+    validate(query.newRemoteMode,'boolean','newRemoteMode')
+    const request: DynamoDBUpdateParams = {
+      TableName: process.env.CLASS_TABLE,
+      Key: {id: query.classId},
+      UpdateExpression: 'set remoteMode = :newRemoteMode',
+      ExpressionAttributeValues: {
+        ':newRemoteMode': query.newRemoteMode
+      },
+      ReturnValues: 'UPDATED_NEW'
+    }
+    const result = await performUpdate(request)
+    return {id: query.classId, remoteMode: result.Attributes.remoteMode}
+  })
+}
+
 export const createSession: APIGatewayProxyHandler = async (event: APIGatewayProxyEvent): Promise<any> => {
   return wrapper(event, false, async query=> {
     await validateTokenRequest(query);
@@ -373,11 +393,11 @@ export const createSession: APIGatewayProxyHandler = async (event: APIGatewayPro
     const getClassInfoParams: DynamoDBGetParams = {
       TableName: process.env.CLASS_TABLE,
       Key: {id: query.classId},
-      ProjectionExpression: 'className',
+      ProjectionExpression: 'className, remoteMode',
     }
     const classInfo = await performGet(getClassInfoParams) as ClassObj
     const newListArray = await Promise.all(query.startingLists.map(async name => {
-      const newList = await createList(query.classId,query.id,'List '+name+' in Class '+classInfo.className);
+      const newList = await createList(query.classId,query.id,'List '+name+' in Class '+classInfo.className, classInfo.remoteMode);
       const result = {}
       result[newList.id] = name
       return result
@@ -449,6 +469,7 @@ export const helpNextUser: APIGatewayProxyHandler = async (event, _context): Pro
 export const joinList: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
     return wrapper(event, true, async query=> {
       await validateTokenRequest(query);
+      validate(query.remoteURL,'string','remoteURL',0,200);
       const list = new ListWrapper(query.list_id)
       let positionInfo;
       try {
@@ -459,9 +480,9 @@ export const joinList: APIGatewayProxyHandler = async (event, _context): Promise
         return;
       }
       if(positionInfo.index !== -1) {
-        Object.assign(positionInfo, await list.updateConnectionForUser(query.id,event.requestContext.connectionId));
+        Object.assign(positionInfo, await list.updateConnectionForUser(query.id,event.requestContext.connectionId,query.remoteURL));
       } else {
-        positionInfo = await list.addUser(query.id,event.requestContext.connectionId, event);
+        positionInfo = await list.addUser(query.id,event.requestContext.connectionId, query.remoteURL, event);
       }
       await sendMessageToUser(query.id, event.requestContext.connectionId, positionInfo,WebSocketMessages.InitalizeSession,event,list);   
     });
@@ -631,6 +652,7 @@ export const updateScheduledSession: APIGatewayProxyHandler = async (event, _con
     validate(query.endHour,'number','endHour',0,23)
     validate(query.endMinute,'number','endMinute',0,59)
     validate(query.sessionName,'string','sessionName',1,50)
+    validateArray(query.startingLists, 'string','startingLists')
     //Note not doing starting lists now as not needed, easy to add
     const updateScheduleParams: DynamoDBUpdateParams = {
       TableName: process.env.SCHEDULE_TABLE,
@@ -644,9 +666,10 @@ export const updateScheduledSession: APIGatewayProxyHandler = async (event, _con
         ':newDay': query.day,
         ':newEndHour': query.endHour,
         ':newEndMinute': query.endMinute,
-        ':newEndDay': query.endDay
+        ':newEndDay': query.endDay,
+        ':newStartingLists': query.startingLists
       },
-      UpdateExpression: 'set sessionName = :newSessionName, startHour = :newHour, startMinute = :newMinute, startDay = :newDay, endHour = :newEndHour, endMinute = :newEndMinute, endDay = :newEndDay',
+      UpdateExpression: 'set startingLists = :newStartingLists, sessionName = :newSessionName, startHour = :newHour, startMinute = :newMinute, startDay = :newDay, endHour = :newEndHour, endMinute = :newEndMinute, endDay = :newEndDay',
     }
     await performUpdate(updateScheduleParams)
   })

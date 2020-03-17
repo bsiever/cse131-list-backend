@@ -17,7 +17,8 @@ interface UserData {
     timedEventTime?: number,
     helpedStudents?: number,
     flaggedStudents?: number,
-    helpedFlaggedStudents?: number
+    helpedFlaggedStudents?: number,
+    remoteURL: string
 }
 
 interface List {
@@ -32,7 +33,8 @@ interface List {
     totalStudentsHelped: number,
     totalEndTime: number,
     totalStartTime: number,
-    estimatedWaitTime: number
+    estimatedWaitTime: number,
+    remoteMode: boolean
 }
 
 export interface UserPositionInfo {
@@ -62,10 +64,11 @@ export class ListWrapper {
         }
         return await performGet(getList)
     }
-    async addUser(userId: string, connectionId: string, event: APIGatewayEvent): Promise<UserPositionInfo> {
+    async addUser(userId: string, connectionId: string, remoteURL: string, event: APIGatewayEvent): Promise<UserPositionInfo> {
         console.log('Adding user '+ userId + ' to list ' + this.id);
         const listObj = await this.getList('classId, estimatedWaitTime');
         const permissionLevel = await checkClassPermissions(userId, listObj.classId,PermissionLevel.Student);
+        validate(remoteURL,'string','remoteURL',0,200);
         const getUserFullName: DynamoDBGetParams = {
             TableName: process.env.USER_TABLE,
             Key: {id: userId},
@@ -92,9 +95,12 @@ export class ListWrapper {
             },
             ReturnValues: 'ALL_NEW'
         }
+        if(remoteURL !== "") {
+            addUser.ExpressionAttributeValues[':newUsers'][0].remoteURL = remoteURL
+        }
         const newList = await performUpdate(addUser) as {Attributes: List}
         await this.updateUsers(event);
-        const data = {totalNumber: -1, flaggedUsers: {}, index: (newList.Attributes[permissionLevel === PermissionLevel.Student ? 'listUsers' : 'observers']).findIndex(value=>value.id === userId), observer: permissionLevel > PermissionLevel.Student, listId: this.id, version: newList.Attributes.version,estimatedWaitTime: listObj.estimatedWaitTime}
+        const data = {remoteMode: newList.Attributes.remoteMode, totalNumber: -1, flaggedUsers: {}, index: (newList.Attributes[permissionLevel === PermissionLevel.Student ? 'listUsers' : 'observers']).findIndex(value=>value.id === userId), observer: permissionLevel > PermissionLevel.Student, listId: this.id, version: newList.Attributes.version,estimatedWaitTime: listObj.estimatedWaitTime}
         if(data.observer) {
             data.totalNumber = newList.Attributes.listUsers.length;
             data.flaggedUsers = newList.Attributes.flaggedUsers;
@@ -161,20 +167,23 @@ export class ListWrapper {
         await performUpdate(updateUser);
     }
 
-    async updateConnectionForUser(userId: string, connectionId: string) {
+    async updateConnectionForUser(userId: string, connectionId: string, remoteURL: string) {
         const index = await this.getIndexOfUser(userId);
         const correctList = index.observer ? 'observers': 'listUsers'
         const updateUser: DynamoDBUpdateParams = {
             TableName: process.env.SESSION_TABLE,
             Key: {id: this.id},
-            UpdateExpression: `set ${correctList}[${index.index}].connectionId = :connectionId   add version :one`,
+            UpdateExpression: `set ${correctList}[${index.index}].connectionId = :connectionId`,
             ConditionExpression: `${correctList}[${index.index}].id = :currentId`,
             ExpressionAttributeValues: {
                 ':currentId': userId,
-                ':connectionId': connectionId,
-                ':one': 1
+                ':connectionId': connectionId
             },
             ReturnValues: 'ALL_NEW'
+        }
+        if(remoteURL !== "") {
+            updateUser.ExpressionAttributeValues[':remoteURL'] = remoteURL;
+            updateUser.UpdateExpression += `,  ${correctList}[${index.index}].remoteURL = :remoteURL`;
         }
         const list = await performUpdate(updateUser) as {Attributes: List};
         const listObj = await this.getList('estimatedWaitTime');
@@ -245,7 +254,7 @@ export class ListWrapper {
         const currentHelperIndex = currentInfo.observers.findIndex(value=>value.id === helperId)
         console.log('List '+this.id+' Helping User: '+oldUser.Attributes.listUsers[indexOfUser].id+' with name ' + oldUser.Attributes.listUsers[indexOfUser].fullName + ' by TA '+currentInfo.observers[currentHelperIndex].id+ ' with name '+currentInfo.observers[currentHelperIndex].fullName);
         //Inform User
-        await sendMessageToUser(oldUser.Attributes.listUsers[indexOfUser].id, oldUser.Attributes.listUsers[indexOfUser].connectionId, {helperName: currentInfo.observers[currentHelperIndex].fullName, observer: false},WebSocketMessages.HelpEvent,event,this);
+        await sendMessageToUser(oldUser.Attributes.listUsers[indexOfUser].id, oldUser.Attributes.listUsers[indexOfUser].connectionId, {helperName: currentInfo.observers[currentHelperIndex].fullName, observer: false, remoteURL: currentInfo.observers[currentHelperIndex].remoteURL},WebSocketMessages.HelpEvent,event,this);
         //Inform Helper
         await sendMessageToUser(currentInfo.observers[currentHelperIndex].id, currentInfo.observers[currentHelperIndex].connectionId, {studentName: oldUser.Attributes.listUsers[indexOfUser].fullName, observer: true},WebSocketMessages.HelperEvent,event,this);
         await this.updateUsers(event)
@@ -396,7 +405,7 @@ function millisToMinutesAndSeconds(millis) {
     return minutes + ":" + (seconds < 10 ? '0' : '') + seconds;
   }
 
-export const createList = async (classId: string, creatorId: string, listName: string): Promise<List> => {
+export const createList = async (classId: string, creatorId: string, listName: string, remoteMode: boolean): Promise<List> => {
     const newList: List = {
         id: randtoken.generate(32),
         classId,
@@ -409,7 +418,8 @@ export const createList = async (classId: string, creatorId: string, listName: s
         totalStartTime: 0,
         totalEndTime: 0,
         totalStudentsHelped: 0,
-        estimatedWaitTime: 0
+        estimatedWaitTime: 0,
+        remoteMode
     }
     const createListParams: DynamoDBPutParams = {
         TableName: process.env.SESSION_TABLE,

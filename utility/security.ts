@@ -30,7 +30,8 @@ export interface ClassObj {
     userCode: string,
     taCode: string,
     adminCode: string,
-    sessions: {[s: string]: SessionObj} //Maps id to SessionObj
+    sessions: {[s: string]: SessionObj}, //Maps id to SessionObj
+    remoteMode: boolean
 }
 
 
