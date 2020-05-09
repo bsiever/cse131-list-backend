@@ -30,18 +30,11 @@ provider:
           - dynamodb:PutItem
           - dynamodb:UpdateItem
           - dynamodb:DeleteItem
-      Resource: "arn:aws:dynamodb:${opt:region, self:provider.region}:*:table/${self:custom.service_prefix}*"
+      Resource: 'arn:aws:dynamodb:${opt:region, self:provider.region}:*:table/${self:custom.service_prefix}*'
     - Effect: Allow
       Action:
           - "execute-api:ManageConnections"
-          - "execute-api:Invoke"
-      Resource:
-          - "arn:aws:execute-api:*:*:**/@connections/*" #TODO restrict
-    - Effect: Allow
-      Action:
-          - ses:SendEmail
-      Resource:
-          - '*'  #TODO restrict
+      Resource: 'arn:aws:execute-api:${opt:region, self:provider.region}:*:*/${self:provider.stage}/@connections/*' #TODO restrict
 
 plugins:
   - serverless-webpack

@@ -20,6 +20,7 @@ provider:
     IMAGE_BUCKET: ${self:custom.service_prefix}-images-${self:provider.stage}
     CLIENT_ID:  ${file(../../secrets/keys-${self:provider.stage}.json):CLIENT_ID}
     CLIENT_SECRET: ${file(../../secrets/keys-${self:provider.stage}.json):CLIENT_SECRET}
+    EMAIL: no-reply@${self:custom.domain}
   iamRoleStatements:
     - Effect: Allow
       Action: 
@@ -30,22 +31,16 @@ provider:
           - dynamodb:PutItem
           - dynamodb:UpdateItem
           - dynamodb:DeleteItem
-      Resource: "arn:aws:dynamodb:${opt:region, self:provider.region}:*:table/${self:custom.service_prefix}*"
+      Resource: 'arn:aws:dynamodb:${opt:region, self:provider.region}:*:table/${self:custom.service_prefix}*'
     - Effect: Allow
-      Action:
-          - s3:putObject
-      Resource: "arn:aws:s3:::${self:provider.environment.IMAGE_BUCKET}*"
+      Action: s3:putObject
+      Resource: 'arn:aws:s3:::${self:provider.environment.IMAGE_BUCKET}*'
     - Effect: Allow
-      Action:
-          - "execute-api:ManageConnections"
-          - "execute-api:Invoke"
-      Resource:
-          - "arn:aws:execute-api:*:*:**/@connections/*" #TODO restrict
-    - Effect: Allow
-      Action:
-          - ses:SendEmail
-      Resource:
-          - '*' #TODO restrict
+      Action: ses:SendEmail
+      Resource: 'arn:aws:ses:${opt:region, self:provider.region}:*:identity/${self:custom.domain}'
+      Condition:
+        StringEquals:
+          ses:FromAddress: '${self:provider.environment.EMAIL}'
 
 plugins:
   - serverless-webpack
