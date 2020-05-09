@@ -4,8 +4,7 @@ const AWS = require('aws-sdk');
 const randtoken = require('rand-token');
 const https = require('https')
 const tokenMinutesTimeout = 90;
-const fromEmail = 'no-reply@131list.com'
-//const websiteURL = 'http://cse131helplist-prototype.s3-website-us-east-1.amazonaws.com'
+const fromEmail = process.env.EMAIL
 
 
 export interface User {
