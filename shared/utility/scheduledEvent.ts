@@ -1,9 +1,10 @@
 import { DynamoDBGetParams, performGet, DynamoDBUpdateParams, performUpdate } from "./database";
 import { ClassObj } from "./security";
 import { createList, ListWrapper } from "./list";
-import { randtoken } from "../handler";
 import { ErrorTypes, GeneratedError } from "./responses";
 import { APIGatewayEvent } from "aws-lambda";
+
+const randtoken = require('rand-token');
 
 export interface DatabaseScheduledEvent {
     id: string,

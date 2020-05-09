@@ -1,0 +1,1 @@
+../../shared/webpack.config.js

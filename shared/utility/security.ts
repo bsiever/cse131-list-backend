@@ -31,7 +31,8 @@ export interface ClassObj {
     taCode: string,
     adminCode: string,
     sessions: {[s: string]: SessionObj}, //Maps id to SessionObj
-    remoteMode: boolean
+    remoteMode: boolean,
+    imageID?: string
 }
 
 
@@ -79,7 +80,7 @@ export const validateLoginRequest = async (data: any): Promise<User> => {
     const getTokenResult: string = await makeRequest(options,dataToPost);
 
     const regex = new RegExp('^.*access_token=([^&]*)&.*token_type=bearer$')
-
+    console.log(getTokenResult)
     const found = getTokenResult.match(regex);
     if(!found) {
         throw new GeneratedError(ErrorTypes.InvalidLogin);
@@ -176,12 +177,12 @@ export const getUserByUsername = async (username: string, allowedFailure: boolea
     validate(username,"string","username",1,50)
     const getUserParams: DynamoDBQueryParams = {
         TableName: process.env.USER_TABLE,
-        IndexName: 'by_username',
+        IndexName: 'get_by_username',
         KeyConditionExpression: 'username = :username',
         ExpressionAttributeValues: {
             ':username' : username
         },
-        ProjectionExpression: 'username, id, classes, fullName, hashedPassword, admin'
+        ProjectionExpression: 'username, id, classes, fullName, hashedPassword, admin, disableAudioAlerts'
     }
     const resultArray: User[] = await performQuery(getUserParams);
     const result = resultArray[0]

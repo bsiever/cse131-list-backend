@@ -1,0 +1,92 @@
+service: ${self:custom.service_prefix}-websocket
+
+custom:
+  domain: ${file(../../globals-${self:provider.stage}.json):DOMAIN}
+  service_prefix: ${file(../../globals-${self:provider.stage}.json):SERVICE_PREFIX}
+  customDomain:
+    websocket:
+      domainName: websocket.${self:custom.domain}
+      endpointType: 'regional'
+
+provider:
+  name: aws
+  runtime: nodejs12.x
+  stage: ${opt:stage, 'dev'}
+  environment:
+    USER_TABLE: ${self:custom.service_prefix}-user-${self:provider.stage}
+    CLASS_TABLE: ${self:custom.service_prefix}-class-${self:provider.stage}
+    SESSION_TABLE: ${self:custom.service_prefix}-session-${self:provider.stage}
+    SCHEDULE_TABLE: ${self:custom.service_prefix}-schedule-${self:provider.stage}
+    WEB_DOMAIN: ${self:custom.customDomain.websocket.domainName}
+  websocketsApiName: ${self:service.name}
+  websocketApiRouteSelectionExpression: $request.body.action
+  iamRoleStatements: # permissions for all of your functions can be set here
+    - Effect: Allow
+      Action: # Gives permission to DynamoDB tables in a specific region
+          - dynamodb:DescribeTable
+          - dynamodb:Query
+          - dynamodb:Scan
+          - dynamodb:GetItem
+          - dynamodb:PutItem
+          - dynamodb:UpdateItem
+          - dynamodb:DeleteItem
+      Resource: "arn:aws:dynamodb:${opt:region, self:provider.region}:*:table/${self:custom.service_prefix}*"
+    - Effect: Allow
+      Action:
+          - "execute-api:ManageConnections"
+          - "execute-api:Invoke"
+      Resource:
+          - "arn:aws:execute-api:*:*:**/@connections/*" #TODO restrict
+    - Effect: Allow
+      Action:
+          - ses:SendEmail
+      Resource:
+          - '*'  #TODO restrict
+
+plugins:
+  - serverless-webpack
+  - serverless-domain-manager
+
+functions:
+  # connectionHandler:
+  #   handler: handler.connectionHandler
+  #   events:
+  #     - websocket:
+  #         route: $connect
+  #     - websocket:
+  #         route: $disconnect
+  # defaultHandler:
+  #   handler: handler.defaultHandler
+  #   events:
+  #     - websocket:
+  #         route: $default
+  joinList:
+    handler: handler.joinList
+    events:
+      - websocket:
+          route: joinList
+  leaveList:
+    handler: handler.leaveList
+    events:
+      - websocket:
+          route: leaveList
+  helpNextUser:
+    handler: handler.helpNextUser
+    events:
+      - websocket:
+          route: helpNextUser
+  flagUser:
+    handler: handler.flagUser
+    events:
+      - websocket:
+          route: flagUser
+  helpFlaggedUser:
+    handler: handler.helpFlaggedUser
+    events:
+      - websocket:
+          route: helpFlaggedUser
+  getFullOverview:
+    handler: handler.getFullOverview
+    events:
+      - websocket:
+          route: getFullOverview

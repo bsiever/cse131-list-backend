@@ -1,21 +1,28 @@
-service: cse131-help
+service: ${self:custom.service_prefix}-rest
+
+custom:
+  domain: ${file(../../globals-${self:provider.stage}.json):DOMAIN}
+  service_prefix: ${file(../../globals-${self:provider.stage}.json):SERVICE_PREFIX}
+  customDomain:
+    rest:
+      domainName: api.${self:custom.domain}
+      endpointType: 'regional'
 
 provider:
   name: aws
   runtime: nodejs12.x
   stage: ${opt:stage, 'dev'}
   environment:
-    USER_TABLE: ${self:service.name}-user-${self:provider.stage}
-    CLASS_TABLE: ${self:service.name}-class-${self:provider.stage}
-    SESSION_TABLE: ${self:service.name}-session-${self:provider.stage}
-    SCHEDULE_TABLE: ${self:service.name}-schedule-${self:provider.stage}
-    CLIENT_ID: '9765e58690fb0cd32bd4'
-    CLIENT_SECRET: '09ccdabea643630b3316fcbb547f01be3a69a410'
-  websocketsApiName: ${self:service.name}-websocketapi
-  websocketApiRouteSelectionExpression: $request.body.action
-  iamRoleStatements: # permissions for all of your functions can be set here
+    USER_TABLE: ${self:custom.service_prefix}-user-${self:provider.stage}
+    CLASS_TABLE: ${self:custom.service_prefix}-class-${self:provider.stage}
+    SESSION_TABLE: ${self:custom.service_prefix}-session-${self:provider.stage}
+    SCHEDULE_TABLE: ${self:custom.service_prefix}-schedule-${self:provider.stage}
+    IMAGE_BUCKET: ${self:custom.service_prefix}-images-${self:provider.stage}
+    CLIENT_ID:  ${file(../../secrets/keys-${self:provider.stage}.json):CLIENT_ID}
+    CLIENT_SECRET: ${file(../../secrets/keys-${self:provider.stage}.json):CLIENT_SECRET}
+  iamRoleStatements:
     - Effect: Allow
-      Action: # Gives permission to DynamoDB tables in a specific region
+      Action: 
           - dynamodb:DescribeTable
           - dynamodb:Query
           - dynamodb:Scan
@@ -23,26 +30,26 @@ provider:
           - dynamodb:PutItem
           - dynamodb:UpdateItem
           - dynamodb:DeleteItem
-      Resource: "arn:aws:dynamodb:${opt:region, self:provider.region}:*:table/${self:service.name}*"
+      Resource: "arn:aws:dynamodb:${opt:region, self:provider.region}:*:table/${self:custom.service_prefix}*"
     - Effect: Allow
       Action:
-          - s3:getObject
           - s3:putObject
-      Resource: "arn:aws:s3:::*"
+      Resource: "arn:aws:s3:::${self:provider.environment.IMAGE_BUCKET}*"
     - Effect: Allow
       Action:
           - "execute-api:ManageConnections"
           - "execute-api:Invoke"
       Resource:
-          - "arn:aws:execute-api:*:*:**/@connections/*"
+          - "arn:aws:execute-api:*:*:**/@connections/*" #TODO restrict
     - Effect: Allow
       Action:
           - ses:SendEmail
       Resource:
-          - '*'
+          - '*' #TODO restrict
 
 plugins:
   - serverless-webpack
+  - serverless-domain-manager
 
 functions:
   login:
@@ -187,50 +194,27 @@ functions:
           path: getScheduleForClass
           method: post
           cors: true
-  # connectionHandler:
-  #   handler: handler.connectionHandler
-  #   events:
-  #     - websocket:
-  #         route: $connect
-  #     - websocket:
-  #         route: $disconnect
-  # defaultHandler:
-  #   handler: handler.defaultHandler
-  #   events:
-  #     - websocket:
-  #         route: $default
-  joinList:
-    handler: handler.joinList
+  getDailyImagePostURL:
+    handler: handler.getDailyImagePostURL
     events:
-      - websocket:
-          route: joinList
-  leaveList:
-    handler: handler.leaveList
+      - http:
+          path: getDailyImagePostURL
+          method: post
+          cors: true
+  setClassDailyImage:
+    handler: handler.setClassDailyImage
     events:
-      - websocket:
-          route: leaveList
-  helpNextUser:
-    handler: handler.helpNextUser
-    events:
-      - websocket:
-          route: helpNextUser
-  flagUser:
-    handler: handler.flagUser
-    events:
-      - websocket:
-          route: flagUser
-  helpFlaggedUser:
-    handler: handler.helpFlaggedUser
-    events:
-      - websocket:
-          route: helpFlaggedUser
-  getFullOverview:
-    handler: handler.getFullOverview
-    events:
-      - websocket:
-          route: getFullOverview
+      - http:
+          path: setClassDailyImage
+          method: post
+          cors: true
+
 resources:
   Resources:
+    images:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:provider.environment.IMAGE_BUCKET}
     users:
       Type: AWS::DynamoDB::Table
       Properties:
@@ -245,6 +229,19 @@ resources:
             KeyType: HASH
         BillingMode: PAY_PER_REQUEST
         GlobalSecondaryIndexes:
+          - IndexName: get_by_username
+            KeySchema:
+              - AttributeName: username
+                KeyType: HASH
+            Projection:
+              NonKeyAttributes:
+                - id
+                - classes
+                - fullName
+                - hashedPassword
+                - admin
+                - disableAudioAlerts
+              ProjectionType: INCLUDE
           - IndexName: by_username
             KeySchema:
               - AttributeName: username

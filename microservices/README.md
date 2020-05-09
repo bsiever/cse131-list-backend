@@ -1,0 +1,1 @@
+All microservices use symlinks to the core shared files, to create a new service, simply copy the skeleton to a new folder, add serverless.yml and handler
