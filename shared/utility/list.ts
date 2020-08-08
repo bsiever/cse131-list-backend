@@ -1,4 +1,4 @@
-import { DynamoDBPutParams, performPut, DynamoDBUpdateParams, performUpdate, DynamoDBGetParams, performGet, DynamoDBDeleteParams, performDelete} from "./database";
+import { DynamoDBPutParams, performPut, DynamoDBUpdateParams, performUpdate, DynamoDBGetParams, performGet, DynamoDBDeleteParams, performDelete, DynamoDBScanParams, performScan} from "./database";
 import { validate, checkClassPermissions, PermissionLevel, User, sendEmail } from "./security";
 import { WebSocketMessages, sendMessageToUser } from "./websocket";
 import { APIGatewayEvent } from "aws-lambda";
@@ -14,6 +14,7 @@ interface UserData {
     id: string,
     permissionLevel: PermissionLevel,
     startTime: number,
+    active?: boolean,
     timedEventTime?: number,
     helpedStudents?: number,
     flaggedStudents?: number,
@@ -88,6 +89,7 @@ export class ListWrapper {
                     id: userId,
                     connectionId,
                     permissionLevel,
+                    active: true,
                     startTime: Date.now()
                 }],
                 ':empty_list': [],
@@ -100,7 +102,8 @@ export class ListWrapper {
         }
         const newList = await performUpdate(addUser) as {Attributes: List}
         await this.updateUsers(event);
-        const data = {remoteMode: newList.Attributes.remoteMode, totalNumber: -1, flaggedUsers: {}, index: (newList.Attributes[permissionLevel === PermissionLevel.Student ? 'listUsers' : 'observers']).findIndex(value=>value.id === userId), observer: permissionLevel > PermissionLevel.Student, listId: this.id, version: newList.Attributes.version,estimatedWaitTime: listObj.estimatedWaitTime}
+        const observersPresent = newList.Attributes.observers.filter(d=>d.connectionId).length
+        const data = {remoteMode: newList.Attributes.remoteMode, totalNumber: -1, flaggedUsers: {}, index: (newList.Attributes[permissionLevel === PermissionLevel.Student ? 'listUsers' : 'observers']).findIndex(value=>value.id === userId), observer: permissionLevel > PermissionLevel.Student, listId: this.id, version: newList.Attributes.version,estimatedWaitTime: listObj.estimatedWaitTime, numObserversPresent: observersPresent}
         if(data.observer) {
             data.totalNumber = newList.Attributes.listUsers.length;
             data.flaggedUsers = newList.Attributes.flaggedUsers;
@@ -186,12 +189,12 @@ export class ListWrapper {
             updateUser.UpdateExpression += `,  ${correctList}[${index.index}].remoteURL = :remoteURL`;
         }
         const list = await performUpdate(updateUser) as {Attributes: List};
-        const listObj = await this.getList('estimatedWaitTime');
-        return {totalNumber: list.Attributes.listUsers.length, flaggedUsers: list.Attributes.flaggedUsers, estimatedWaitTime: listObj.estimatedWaitTime};
+        const observersPresent = list.Attributes.observers.filter(d=>d.connectionId).length
+        return {totalNumber: list.Attributes.listUsers.length, flaggedUsers: list.Attributes.flaggedUsers, estimatedWaitTime: list.Attributes.estimatedWaitTime, numObserversPresent: observersPresent};
     }
 
     async getIndexOfUser(userId: string): Promise<UserPositionInfo>  {
-        const info = await this.getList('listUsers, observers, version') as List
+        const info = await this.getList('listUsers, observers, version')
         const observerIndex = info.observers.findIndex(value=>value.id === userId)
         if(observerIndex !== -1) {
             return { index: observerIndex, observer: true, listId: this.id, version: info.version}
@@ -272,12 +275,22 @@ export class ListWrapper {
     //This function does not wait
     async updateUsers(event: APIGatewayEvent) {
         const listInfo = await this.getList('listUsers, observers, version, flaggedUsers, estimatedWaitTime')
+        let observersPresent = listInfo.observers.filter(d=>d.connectionId).length
         await Promise.all(listInfo.listUsers.map((user, index)=> {
-            return sendMessageToUser(user.id, user.connectionId, {index, observer: false, listId: this.id, version: listInfo.version,estimatedWaitTime: listInfo.estimatedWaitTime},WebSocketMessages.SetPosition,event,this);
+            return sendMessageToUser(user.id, user.connectionId, {index, observer: false, listId: this.id, version: listInfo.version,estimatedWaitTime: listInfo.estimatedWaitTime, numObserversPresent: observersPresent},WebSocketMessages.SetPosition,event,this);
         }))
-        await Promise.all(listInfo.observers.map((user)=> {
-           return sendMessageToUser(user.id, user.connectionId, {observer: true, listId: this.id, totalNumber: listInfo.listUsers.length, version: listInfo.version, flaggedUsers: listInfo.flaggedUsers,estimatedWaitTime: listInfo.estimatedWaitTime},WebSocketMessages.UpdateListStatus,event,this);
+        const observersOkay = await Promise.all(listInfo.observers.map((user)=> {
+           return sendMessageToUser(user.id, user.connectionId, {observer: true, listId: this.id, totalNumber: listInfo.listUsers.length, version: listInfo.version, flaggedUsers: listInfo.flaggedUsers,estimatedWaitTime: listInfo.estimatedWaitTime, numObserversPresent: observersPresent},WebSocketMessages.UpdateListStatus,event,this);
         }))
+        if(!observersOkay.every(Boolean)) {
+            observersPresent = observersOkay.filter(Boolean).length
+            await Promise.all(listInfo.listUsers.map((user, index)=> {
+                return sendMessageToUser(user.id, user.connectionId, {index, observer: false, listId: this.id, version: listInfo.version,estimatedWaitTime: listInfo.estimatedWaitTime, numObserversPresent: observersPresent},WebSocketMessages.SetPosition,event,this);
+            }))
+            await Promise.all(listInfo.observers.map((user)=> {
+                return sendMessageToUser(user.id, user.connectionId, {observer: true, listId: this.id, totalNumber: listInfo.listUsers.length, version: listInfo.version, flaggedUsers: listInfo.flaggedUsers,estimatedWaitTime: listInfo.estimatedWaitTime, numObserversPresent: observersPresent},WebSocketMessages.UpdateListStatus,event,this);
+            }))
+        }
     }
 
     async closeList(event: APIGatewayEvent): Promise<void> {
@@ -322,7 +335,7 @@ export class ListWrapper {
                 ':one': 1
             }
         }
-        await performUpdate(flagUser) as {Attributes: List}
+        await performUpdate(flagUser)
         await sendMessageToUser(userId, event.requestContext.connectionId, {studentName, message, observer: true, flagged: true},WebSocketMessages.FlagRecorded,event,this);
         await this.updateUsers(event);
     }
@@ -346,7 +359,7 @@ export class ListWrapper {
                 ':one': 1
             }
         }
-        await performUpdate(unFlagUser) as {Attributes: List}
+        await performUpdate(unFlagUser)
         await sendMessageToUser(userId, event.requestContext.connectionId, {studentName, message, observer: true, flagged: true},WebSocketMessages.HelperEvent,event,this);
         await this.updateUsers(event);
     }
@@ -427,4 +440,28 @@ export const createList = async (classId: string, creatorId: string, listName: s
     }
     await performPut(createListParams);
     return newList;
+}
+
+export const refreshAllObserversInLists = async(event: APIGatewayEvent) => {
+    const getAllLists: DynamoDBScanParams = {
+        TableName: process.env.SESSION_TABLE
+    } as DynamoDBScanParams //Force conversion to allow no filters
+    const lists: List[] = await performScan(getAllLists);
+    console.log(lists)
+    for(let list of lists) {
+        let listWrapped = new ListWrapper(list.id)
+        const observersOkay = await Promise.all(list.observers.map((user)=> {
+            return sendMessageToUser(user.id, user.connectionId, {} ,WebSocketMessages.Ping,event,listWrapped);
+        }))
+        if(!observersOkay.every(Boolean)) {
+            let observersPresent = observersOkay.filter(Boolean).length
+            await Promise.all(list.listUsers.map((user, index)=> {
+                return sendMessageToUser(user.id, user.connectionId, {index, observer: false, listId: list.id, version: list.version,estimatedWaitTime: list.estimatedWaitTime, numObserversPresent: observersPresent},WebSocketMessages.SetPosition,event,listWrapped);
+            }))
+            console.log(list)
+            await Promise.all(list.observers.map((user)=> {
+                return sendMessageToUser(user.id, user.connectionId, {observer: true, listId: list.id, totalNumber: list.listUsers.length, version: list.version, flaggedUsers: list.flaggedUsers,estimatedWaitTime: list.estimatedWaitTime, numObserversPresent: observersPresent},WebSocketMessages.UpdateListStatus,event,listWrapped);
+            }))
+        }
+    }
 }

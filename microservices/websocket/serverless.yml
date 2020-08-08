@@ -83,3 +83,7 @@ functions:
     events:
       - websocket:
           route: getFullOverview
+  checkObserverNumbers:
+    handler: handler.checkObserverNumbers
+    events:
+      - schedule: cron(*/5 * * * ? *)

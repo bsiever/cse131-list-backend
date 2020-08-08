@@ -13,7 +13,8 @@ export enum WebSocketMessages{
     HelpEvent = 'helpEvent',
     HelperEvent = 'helperEvent',
     FlagRecorded = 'flagRecorded',
-    FullInfo = 'fullInfo'
+    FullInfo = 'fullInfo',
+    Ping = 'ping'
 }
 
 const initApi = (_: APIGatewayEvent) => {
@@ -25,7 +26,8 @@ const initApi = (_: APIGatewayEvent) => {
     }
 }
 
-export const sendMessageToUser = async (userId: string, connectionId: string, message: any, messageType: WebSocketMessages, event: APIGatewayEvent, list: ListWrapper) => {
+//Returns false if the user's connection was broken
+export const sendMessageToUser = async (userId: string, connectionId: string, message: any, messageType: WebSocketMessages, event: APIGatewayEvent, list: ListWrapper): Promise<boolean> => {
     if(connectionId) {
         initApi(event);
         try {
@@ -33,7 +35,9 @@ export const sendMessageToUser = async (userId: string, connectionId: string, me
         } catch (e) {
             if (e.statusCode === 410) {
                 await list.removeConnectionForUser(userId, connectionId);
+                return false;
             }
         }
     }
+    return true;
 }
