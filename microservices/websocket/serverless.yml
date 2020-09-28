@@ -68,6 +68,11 @@ functions:
     events:
       - websocket:
           route: helpNextUser
+  helpUser:
+    handler: handler.helpUser
+    events:
+      - websocket:
+          route: helpUser
   flagUser:
     handler: handler.flagUser
     events:

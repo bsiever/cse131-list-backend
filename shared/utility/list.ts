@@ -14,7 +14,6 @@ interface UserData {
     id: string,
     permissionLevel: PermissionLevel,
     startTime: number,
-    active?: boolean,
     timedEventTime?: number,
     helpedStudents?: number,
     flaggedStudents?: number,
@@ -89,7 +88,6 @@ export class ListWrapper {
                     id: userId,
                     connectionId,
                     permissionLevel,
-                    active: true,
                     startTime: Date.now()
                 }],
                 ':empty_list': [],
@@ -111,10 +109,14 @@ export class ListWrapper {
         return data;
     }
 
-    async getUserPermissionLevel(userId: string, required: PermissionLevel, helpingUser: boolean, flaggingUser: boolean, helpingFlaggedUser: boolean, helpingUserIndex?: number) {
+    async getUserPermissionLevel(userId: string, required: PermissionLevel, helpingUser: boolean, flaggingUser: boolean, helpingFlaggedUser: boolean, helpingUserId?: string): Promise<List> {
             const list = await this.getList('listUsers, observers');
             const listIndex = list.listUsers.findIndex(value=>value.id === userId);
             const observerIndex = list.observers.findIndex(value=>value.id === userId);
+            let helpingUserIndex = 0;
+            if(helpingUserId) {
+                helpingUserIndex = list.listUsers.findIndex(value=>value.id === helpingUserId)
+            }
             if(listIndex > -1) {
                 if(list.listUsers[listIndex].permissionLevel < required) {
                     throw new GeneratedError(ErrorTypes.InvalidPermissions);
@@ -131,7 +133,7 @@ export class ListWrapper {
                 TableName: process.env.SESSION_TABLE,
                 Key: {id: this.id},
                 UpdateExpression: `set #listName[${Math.max(listIndex,observerIndex)}].timedEventTime = :currentTime` +(helpingUser ? `, #listName[${Math.max(listIndex,observerIndex)}].helpedStudents = if_not_exists(#listName[${Math.max(listIndex,observerIndex)}].helpedStudents, :start) + :one`:'')+(flaggingUser ? `, #listName[${Math.max(listIndex,observerIndex)}].flaggedStudents = if_not_exists(#listName[${Math.max(listIndex,observerIndex)}].flaggedStudents, :start) + :one`:'')+(helpingFlaggedUser ? `, #listName[${Math.max(listIndex,observerIndex)}].helpedFlaggedStudents = if_not_exists(#listName[${Math.max(listIndex,observerIndex)}].helpedFlaggedStudents, :start) + :one`:''),
-                ConditionExpression: `(attribute_not_exists(#listName[${Math.max(listIndex,observerIndex)}].timedEventTime) or #listName[${Math.max(listIndex,observerIndex)}].timedEventTime < :cutoffTime)` + (helpingUser ? ` and (attribute_exists(listUsers[${helpingUserIndex}]))`:''),
+                ConditionExpression: `(attribute_not_exists(#listName[${Math.max(listIndex,observerIndex)}].timedEventTime) or #listName[${Math.max(listIndex,observerIndex)}].timedEventTime < :cutoffTime)` + (helpingUser ? ` and (attribute_exists(listUsers[${helpingUserIndex}]))`:'') + (helpingUserId ? ` and (listUsers[${helpingUserIndex}].id = :helpingUserId)`:''),
                 ExpressionAttributeNames: {
                     '#listName': Math.max(listIndex,observerIndex) === observerIndex ? 'observers': 'listUsers'
                 },
@@ -142,8 +144,12 @@ export class ListWrapper {
                     ':one': 1
                 }
             }
+            if(helpingUserId) {
+                updateUser.ExpressionAttributeValues[':helpingUserId'] = helpingUserId
+            }
             try {
                 await performUpdate(updateUser);
+                return list;
             } catch(e) {
                 console.log(e);
                 throw new GeneratedError(ErrorTypes.TooManyRequests);
@@ -227,9 +233,14 @@ export class ListWrapper {
         }
         await this.updateUsers(event)
     }
-
-    async helpUser(helperId: string, indexOfUser: number, event: APIGatewayEvent, idOfUser?: string) {
-        await this.getUserPermissionLevel(helperId, PermissionLevel.TA,true,false,false,indexOfUser);
+    
+    //Get first user off the list by default else lookup by id
+    async helpUser(helperId: string, event: APIGatewayEvent, idOfUser?: string) {
+        const list = await this.getUserPermissionLevel(helperId, idOfUser ? PermissionLevel.Professor : PermissionLevel.TA,true,false,false,idOfUser); //Require Professor if a specific user
+        let indexOfUser = 0;
+        if(idOfUser) {
+            indexOfUser = list.listUsers.findIndex(value=>value.id === idOfUser)
+        }
         //Update table accordingly
         const getNextUserParams: DynamoDBUpdateParams = {
             TableName: process.env.SESSION_TABLE,
@@ -310,9 +321,10 @@ export class ListWrapper {
         await performDelete(deleteList);
     }
 
-    async flagUser(userId: string, studentName: string, message: string, event: APIGatewayEvent): Promise<void> {
+    async flagUser(userId: string, studentName: string, message: string, event: APIGatewayEvent, startingLevel = 0): Promise<void> {
         validate(studentName, 'string', 'studentName',1,50)
         validate(message, 'string','message',0,1000);
+        validate(startingLevel, 'number','startingLevel',0,2)
         await this.getUserPermissionLevel(userId, PermissionLevel.TA,false, true,false);
         const getTAFullName: DynamoDBGetParams = {
             TableName: process.env.USER_TABLE,
@@ -331,7 +343,7 @@ export class ListWrapper {
                 '#studentName': studentName
             },
             ExpressionAttributeValues: {
-                ':message': 'Time: '+time+', TA name: '+taName+', Message: '+message,
+                ':message': 'Time: '+time+', TA name: '+taName+', Message: '+message+startingLevel,
                 ':one': 1
             }
         }

@@ -82,7 +82,6 @@ export const createClass: APIGatewayProxyHandler = async (event: APIGatewayProxy
   This function is complex, as it must deconstruct every part of the class. First, it removes the class from
   the users' profiles, preventing any new commands from being run. It then deletes the actual class.
 
-  TODO delete all active sessions
   TODO prevent race condition with other administrators performing actions
 
   id: string

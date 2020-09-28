@@ -179,7 +179,7 @@ export const getUserByUsername = async (username: string, allowedFailure: boolea
         IndexName: 'get_by_username',
         KeyConditionExpression: 'username = :username',
         ExpressionAttributeValues: {
-            ':username' : username
+            ':username' : username.toLowerCase()
         },
         ProjectionExpression: 'username, id, classes, fullName, hashedPassword, admin, disableAudioAlerts'
     }

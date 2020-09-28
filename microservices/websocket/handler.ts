@@ -19,7 +19,21 @@ export const helpNextUser: APIGatewayProxyHandler = async (event, _context): Pro
     const list = new ListWrapper(query.list_id)
     let positionInfo = (await list.getIndexOfUser(query.id));
     if(positionInfo.index !== -1) {
-      await list.helpUser(query.id,0,event) //Gets first user
+      await list.helpUser(query.id,event) //Gets first user
+    } else {
+      throw new GeneratedError(ErrorTypes.ConnectionNotInSession)
+    }
+  });
+}
+
+export const helpUser: APIGatewayProxyHandler = async (event, _context): Promise<any> => {
+  return wrapper(event, true, async query=> {
+    await validateTokenRequest(query);
+    validate(query.helpeeId,'string','helpeeId',32,32);
+    const list = new ListWrapper(query.list_id)
+    let positionInfo = (await list.getIndexOfUser(query.id));
+    if(positionInfo.index !== -1) {
+      await list.helpUser(query.id,event,query.helpeeId) //Gets first user
     } else {
       throw new GeneratedError(ErrorTypes.ConnectionNotInSession)
     }
@@ -60,7 +74,7 @@ export const flagUser: APIGatewayProxyHandler = async (event, _context): Promise
   return wrapper(event, true, async query=> {
     await validateTokenRequest(query);
     const list = new ListWrapper(query.list_id)
-    await list.flagUser(query.id, query.studentName, query.message, event);
+    await list.flagUser(query.id, query.studentName, query.message, event, query.startingLevel);
   });
 }
 
