@@ -1,8 +1,11 @@
-# TODO before Deploy
+# Before Deployment
 
 Make sure you have the domain in SES
+
 Have github private credientials in secrets folder and ready to go
+
 Have created certificates for all of your domains, each with a base and wildcard on same cert
+
 Set images bucket after creation to public
         {
             "Version": "2012-10-17",
@@ -18,6 +21,7 @@ Set images bucket after creation to public
         }
 
 And set CORS 
+
 <?xml version="1.0" encoding="UTF-8"?>
 <CORSConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
 <CORSRule>
