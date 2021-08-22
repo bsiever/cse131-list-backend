@@ -306,9 +306,14 @@ export const refreshUserInfo: APIGatewayProxyHandler = async (event: APIGatewayP
     let result =  await performGet(request)
     //Copied from login function make function to not duplicate
     result.classes = await Promise.all((result.classes as string[]).map(async id=>{
-      const className =  await getClassName(id);
-      return {id, className}
+      try {
+        const className =  await getClassName(id);
+        return {id, className}
+      } catch(e) {
+        return null;
+      }
     }))
+    result.classes = result.classes.filter(i=>i!=null)
     return result
   })
 }

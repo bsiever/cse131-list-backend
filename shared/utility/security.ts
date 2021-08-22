@@ -105,6 +105,7 @@ export const validateLoginRequest = async (data: any): Promise<User> => {
     }
     const emails: email[] = JSON.parse(getEmailsResult);
 
+    console.log(emails)
     let userEmail = null;
     for(let email of emails) {
         if(email.email.slice(-10).toLowerCase() === '@wustl.edu') {
@@ -139,9 +140,17 @@ export const validateLoginRequest = async (data: any): Promise<User> => {
     result.userToken = randtoken.generate(32);
     await updateToken(result.id, result.userToken);
     result.classes = await Promise.all((result.classes as string[]).map(async id=>{
-        const className =  await getClassName(id);
-        return {id, className}
+        try {
+          const className =  await getClassName(id);
+          return {id, className}
+        } catch(e) {
+          console.log("Error Invalid Class")
+          console.log(result.id)
+          console.log(id)
+          return null;
+        }
     }))
+    result.classes = result.classes.filter(i=>i!=null)
     return result;
 }
 

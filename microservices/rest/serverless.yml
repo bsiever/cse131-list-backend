@@ -12,6 +12,7 @@ provider:
   name: aws
   runtime: nodejs12.x
   stage: ${opt:stage, 'dev'}
+  timeout: 30
   environment:
     USER_TABLE: ${self:custom.service_prefix}-user-${self:provider.stage}
     CLASS_TABLE: ${self:custom.service_prefix}-class-${self:provider.stage}
